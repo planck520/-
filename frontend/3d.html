@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图书馆3D可视化系统</title>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Microsoft YaHei', sans-serif; }
+        body { overflow: hidden; background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460); color: #fff; height: 100vh; }
+        #container { position: relative; width: 100%; height: 100vh; }
+        #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        .header {
+            position: absolute; top: 20px; left: 0; width: 100%; text-align: center; z-index: 100;
+            padding: 12px; background: rgba(15, 25, 45, 0.75);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+            border-bottom: 1px solid rgba(100,180,255,0.3);
+        }
+        .header h1 {
+            font-size: 2.5rem; margin-bottom: 5px;
+            background: linear-gradient(to right, #64b5f6, #42a5f5, #90caf9);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 10px rgba(100,180,255,0.3); letter-spacing: 2px;
+        }
+        .header p { font-size: 1.1rem; opacity: 0.8; color: #90caf9; }
+
+        .control-panel {
+            position: absolute; top: 130px; right: 20px; width: 240px;
+            background: rgba(15,25,45,0.85); border-radius: 12px; padding: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+            z-index: 100; border: 1px solid rgba(100,180,255,0.3); transition: width 0.3s;
+        }
+        .control-panel.collapsed { width: 50px; padding: 12px 5px; }
+        .control-panel.collapsed .panel-title {
+            margin: 0; padding: 5px 0; border-bottom: none;
+            border-right: 1px solid rgba(100,180,255,0.3);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .control-panel.collapsed .sensor-list { display: none; }
+
+        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; cursor: pointer; }
+        .panel-header:hover { opacity: 0.8; }
+        .collapse-btn {
+            background: none; border: none; color: #64b5f6; font-size: 16px; cursor: pointer;
+            padding: 2px; border-radius: 3px; display: flex; align-items: center;
+            justify-content: center; width: 20px; height: 20px;
+        }
+        .collapse-btn:hover { background: rgba(100,180,255,0.2); }
+        .control-panel.collapsed .collapse-btn { transform: rotate(180deg); }
+
+        .panel-title {
+            font-size: 1.0rem; color: #64b5f6; text-align: center; padding-bottom: 8px;
+            border-bottom: 1px solid rgba(100,180,255,0.3);
+            text-transform: uppercase; letter-spacing: 1px; flex: 1;
+        }
+        .sensor-list { max-height: 500px; overflow-y: auto; padding-right: 8px; }
+        .sensor-item {
+            background: rgba(20,40,70,0.5); border-radius: 8px; padding: 10px;
+            margin-bottom: 10px; border-left: 3px solid #64b5f6; transition: background 0.3s;
+        }
+        .sensor-item:hover { background: rgba(30,60,100,0.7); }
+        .sensor-name { font-weight: bold; font-size: 0.85rem; margin-bottom: 4px; display: flex; justify-content: space-between; color: #e0f0ff; }
+        .sensor-location { font-size: 0.75rem; opacity: 0.8; margin-bottom: 6px; color: #90caf9; }
+        .sensor-value { font-size: 0.9rem; color: #42a5f5; text-align: right; font-weight: bold; }
+
+        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+        .status-normal { background: #00e676; box-shadow: 0 0 8px #00e676; }
+        .status-warning { background: #ffd740; box-shadow: 0 0 8px #ffd740; }
+        .status-alarm { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
+
+        .view-controls {
+            position: absolute; top: 130px; left: 20px; background: rgba(15,25,45,0.85);
+            border-radius: 12px; padding: 12px; z-index: 100; display: flex;
+            flex-direction: column; gap: 8px; border: 1px solid rgba(100,180,255,0.3);
+            backdrop-filter: blur(5px);
+        }
+        .view-btn {
+            padding: 10px 16px; background: linear-gradient(135deg, #1a3a5c, #0f3460);
+            border: 2px solid transparent; border-radius: 8px; color: #90caf9;
+            cursor: pointer; transition: all 0.3s; font-weight: bold; text-align: center;
+            letter-spacing: 1px; font-size: 13px; white-space: nowrap;
+        }
+        .view-btn:hover { transform: translateX(3px); box-shadow: 0 5px 15px rgba(100,180,255,0.3); border-color: #64b5f6; }
+        .view-btn.active-view {
+            background: linear-gradient(135deg, #1565c0, #42a5f5);
+            box-shadow: 0 0 15px rgba(66,165,245,0.5); border: 2px solid #64b5f6; color: #fff;
+        }
+
+        .legend-panel {
+            position: absolute; bottom: 20px; left: 20px; background: rgba(15,25,45,0.8);
+            border-radius: 10px; padding: 12px 16px; z-index: 100;
+            border: 1px solid rgba(100,180,255,0.3); backdrop-filter: blur(5px);
+            display: flex; gap: 20px; font-size: 0.8rem;
+        }
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+        .footer {
+            position: absolute; bottom: 20px; right: 20px; background: rgba(15,25,45,0.75);
+            padding: 10px 20px; border-radius: 10px; font-size: 0.85rem; z-index: 100;
+            backdrop-filter: blur(5px); border: 1px solid rgba(100,180,255,0.3); color: #90caf9;
+        }
+
+        .sensor-list::-webkit-scrollbar { width: 6px; }
+        .sensor-list::-webkit-scrollbar-track { background: rgba(15,25,45,0.3); border-radius: 3px; }
+        .sensor-list::-webkit-scrollbar-thumb { background: #64b5f6; border-radius: 3px; }
+        .sensor-list::-webkit-scrollbar-thumb:hover { background: #42a5f5; }
+
+        .grid-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(100,180,255,0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(100,180,255,0.06) 1px, transparent 1px);
+            background-size: 50px 50px; pointer-events: none; z-index: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-overlay"></div>
+    <div id="container">
+        <canvas id="canvas"></canvas>
+
+        <div class="header">
+            <h1>📚 智慧图书馆3D可视化系统</h1>
+            <p>Library Smart Monitoring System — 实时环境监测</p>
+        </div>
+
+        <div class="view-controls">
+            <button class="view-btn active-view" id="view-overview">🏛️ 全景概览</button>
+            <button class="view-btn" id="view-front">🚪 正门入口</button>
+            <button class="view-btn" id="view-floor1">📖 一楼借阅区</button>
+            <button class="view-btn" id="view-floor2">📚 二楼阅览区</button>
+            <button class="view-btn" id="view-outdoor">🌳 周边环境</button>
+        </div>
+
+        <div class="control-panel" id="control-panel">
+            <div class="panel-header">
+                <div class="panel-title">📡 传感器实时数据</div>
+                <button class="collapse-btn" id="collapse-btn">◀</button>
+            </div>
+            <div class="sensor-list">
+                <div class="sensor-item" id="sensor-air">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>空气质量传感器</span></div>
+                    <div class="sensor-location">图书馆 · 一楼大厅入口</div>
+                    <div class="sensor-value">PM2.5: -- μg/m³</div>
+                </div>
+                <div class="sensor-item" id="sensor-smoke">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>烟雾传感器</span></div>
+                    <div class="sensor-location">图书馆 · 二楼天花板</div>
+                    <div class="sensor-value">-- ppm</div>
+                </div>
+                <div class="sensor-item" id="sensor-co2">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>CO₂传感器</span></div>
+                    <div class="sensor-location">图书馆 · 二楼阅览区中央</div>
+                    <div class="sensor-value">-- ppm</div>
+                </div>
+                <div class="sensor-item" id="sensor-noise">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>噪音传感器</span></div>
+                    <div class="sensor-location">图书馆 · 一楼阅读区</div>
+                    <div class="sensor-value">-- dB</div>
+                </div>
+                <div class="sensor-item" id="sensor-temp-humid">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>温湿度传感器</span></div>
+                    <div class="sensor-location">图书馆 · 一楼中央区域</div>
+                    <div class="sensor-value">--°C | --% RH</div>
+                </div>
+                <div class="sensor-item" id="sensor-light">
+                    <div class="sensor-name"><span><span class="status-indicator status-normal"></span>光照强度传感器</span></div>
+                    <div class="sensor-location">图书馆 · 二楼南侧窗边</div>
+                    <div class="sensor-value">-- lux</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="legend-panel">
+            <div class="legend-item"><span class="legend-dot" style="background:#00e676;box-shadow:0 0 6px #00e676;"></span> 正常</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#ffd740;box-shadow:0 0 6px #ffd740;"></span> 警告</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#ff5252;box-shadow:0 0 6px #ff5252;"></span> 报警</div>
+        </div>
+
+        <div class="footer">
+            🕐 <span id="clock">--</span> &nbsp;|&nbsp; 传感器数量: 6 &nbsp;|&nbsp; 系统运行中
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls, labelRenderer;
+        let sensors = [];
+        const buildingShells = [];
+        const buildingGroup = new THREE.Group(); // 图书馆整体group
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0e1a);
+            scene.fog = new THREE.Fog(0x0a0e1a, 45, 140);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 28, 50);
+
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            labelRenderer = new THREE.CSS2DRenderer();
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.domElement.style.position = 'absolute';
+            labelRenderer.domElement.style.top = '0px';
+            labelRenderer.domElement.style.pointerEvents = 'none';
+            document.body.appendChild(labelRenderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.maxPolarAngle = Math.PI / 2.1;
+            controls.minDistance = 8;
+            controls.maxDistance = 80;
+            controls.target.set(0, 5, 0);
+
+            // 灯光
+            scene.add(new THREE.AmbientLight(0x404060, 1.2));
+            scene.add(new THREE.HemisphereLight(0xffeedd, 0x304060, 1.0));
+
+            const dirLight = new THREE.DirectionalLight(0xfff5e6, 0.8);
+            dirLight.position.set(25, 35, 20);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 150;
+            dirLight.shadow.camera.left = -50; dirLight.shadow.camera.right = 50;
+            dirLight.shadow.camera.top = 50; dirLight.shadow.camera.bottom = -50;
+            scene.add(dirLight);
+
+            const ptLight1 = new THREE.PointLight(0x64b5f6, 0.7, 60);
+            ptLight1.position.set(0, 12, 0);
+            scene.add(ptLight1);
+
+            const ptLight2 = new THREE.PointLight(0xffcc80, 0.4, 35);
+            ptLight2.position.set(18, 5, -2);
+            scene.add(ptLight2);
+
+            createGround();
+            createLibraryBuilding();
+            createSensors();
+            createEnvironment();
+
+            window.addEventListener('resize', onWindowResize);
+            setupViewButtons();
+            setupPanelCollapse();
+            setupClock();
+            animate();
+
+            setTimeout(() => { loadSensorData(); setInterval(loadSensorData, 5000); }, 1000);
+        }
+
+        // ========== 地面 ==========
+        function createGround() {
+            const ground = new THREE.Mesh(
+                new THREE.PlaneGeometry(70, 70),
+                new THREE.MeshStandardMaterial({ color: 0x1a2030, roughness: 0.9, metalness: 0.2 })
+            );
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.5;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // 围绕图书馆的环形道路
+            const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a4050, roughness: 0.85, metalness: 0.3 });
+
+            // 前方主路
+            const frontPath = new THREE.Mesh(new THREE.PlaneGeometry(6, 16), pathMat);
+            frontPath.rotation.x = -Math.PI / 2;
+            frontPath.position.set(0, -0.48, 12);
+            frontPath.receiveShadow = true;
+            scene.add(frontPath);
+
+            // 后方小路
+            const backPath = new THREE.Mesh(new THREE.PlaneGeometry(4, 14), pathMat);
+            backPath.rotation.x = -Math.PI / 2;
+            backPath.position.set(0, -0.48, -12);
+            backPath.receiveShadow = true;
+            scene.add(backPath);
+
+            // 左侧小路
+            const leftPath = new THREE.Mesh(new THREE.PlaneGeometry(14, 3), pathMat);
+            leftPath.rotation.x = -Math.PI / 2;
+            leftPath.position.set(-13, -0.48, -2);
+            leftPath.receiveShadow = true;
+            scene.add(leftPath);
+
+            // 右侧小路
+            const rightPath = new THREE.Mesh(new THREE.PlaneGeometry(14, 3), pathMat);
+            rightPath.rotation.x = -Math.PI / 2;
+            rightPath.position.set(13, -0.48, -2);
+            rightPath.receiveShadow = true;
+            scene.add(rightPath);
+
+            scene.add(new THREE.GridHelper(60, 12, 0x2a3050, 0x1a2030));
+
+            // 馆前广场
+            const plaza = new THREE.Mesh(
+                new THREE.PlaneGeometry(12, 8),
+                new THREE.MeshStandardMaterial({ color: 0x2a3545, roughness: 0.7, metalness: 0.3 })
+            );
+            plaza.rotation.x = -Math.PI / 2;
+            plaza.position.set(0, -0.47, 7.5);
+            plaza.receiveShadow = true;
+            scene.add(plaza);
+        }
+
+        // ========== 图书馆建筑（唯一建筑） ==========
+        function createLibraryBuilding() {
+            buildingGroup.position.set(0, 0, 0);
+            scene.add(buildingGroup);
+
+            // --- 主体结构（宽大的长方体，代表2层楼） ---
+            const mainBody = new THREE.Mesh(
+                new THREE.BoxGeometry(20, 12, 16),
+                new THREE.MeshStandardMaterial({ color: 0x5a6878, roughness: 0.65, metalness: 0.55 })
+            );
+            mainBody.position.y = 6;
+            mainBody.castShadow = true;
+            mainBody.receiveShadow = true;
+            buildingShells.push(mainBody);
+            buildingGroup.add(mainBody);
+
+            // --- 底座/地基 ---
+            const base = new THREE.Mesh(
+                new THREE.BoxGeometry(21.5, 0.8, 17.5),
+                new THREE.MeshStandardMaterial({ color: 0x3a4858, roughness: 0.7, metalness: 0.6 })
+            );
+            base.position.y = -0.4;
+            base.receiveShadow = true;
+            buildingGroup.add(base);
+
+            // --- 台阶 ---
+            for (let i = 0; i < 4; i++) {
+                const step = new THREE.Mesh(
+                    new THREE.BoxGeometry(6 + i * 0.6, 0.2, 0.7 + i * 0.3),
+                    new THREE.MeshStandardMaterial({ color: 0x6a7a8a, roughness: 0.55, metalness: 0.5 })
+                );
+                step.position.set(0, -0.3 + i * 0.2, 8.3 + i * 0.3);
+                step.receiveShadow = true;
+                buildingGroup.add(step);
+            }
+
+            // --- 屋顶 ---
+            const roof = new THREE.Mesh(
+                new THREE.BoxGeometry(21, 0.5, 17),
+                new THREE.MeshStandardMaterial({ color: 0x2a3848, roughness: 0.45, metalness: 0.7 })
+            );
+            roof.position.y = 12.25;
+            buildingShells.push(roof);
+            buildingGroup.add(roof);
+
+            // --- 三角形山墙（前后各一个） ---
+            function createGable(zOffset) {
+                const shape = new THREE.Shape();
+                shape.moveTo(-10.5, 12.5);
+                shape.lineTo(0, 12.5 + 3.8);
+                shape.lineTo(10.5, 12.5);
+                shape.closePath();
+                const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: false });
+                const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x3a4858, roughness: 0.45, metalness: 0.7 }));
+                mesh.position.set(0, 0, zOffset - 0.25);
+                buildingShells.push(mesh);
+                buildingGroup.add(mesh);
+            }
+            createGable(8.25);   // 前山墙
+            createGable(-8.25);  // 后山墙
+
+            // --- 正面窗户（3行 x 5列） ---
+            const winMat = new THREE.MeshStandardMaterial({
+                color: 0x88bbee, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.75
+            });
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 5; col++) {
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.5, 0.12), winMat);
+                    win.position.set(-6.5 + col * 3.25, 1.5 + row * 3.8, 8.06);
+                    buildingGroup.add(win);
+                    buildingShells.push(win);
+                }
+            }
+
+            // --- 背面窗户 ---
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 5; col++) {
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.5, 0.12), winMat);
+                    win.position.set(-6.5 + col * 3.25, 1.5 + row * 3.8, -8.06);
+                    buildingGroup.add(win);
+                    buildingShells.push(win);
+                }
+            }
+
+            // --- 侧面窗户 ---
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 2; col++) {
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.5, 2.2), winMat);
+                    win.position.set(10.06, 1.5 + row * 3.8, -3 + col * 6);
+                    buildingGroup.add(win);
+                    buildingShells.push(win);
+                }
+            }
+            // 另一侧
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 2; col++) {
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.5, 2.2), winMat);
+                    win.position.set(-10.06, 1.5 + row * 3.8, -3 + col * 6);
+                    buildingGroup.add(win);
+                    buildingShells.push(win);
+                }
+            }
+
+            // --- 正门 ---
+            const door = new THREE.Mesh(
+                new THREE.BoxGeometry(4.5, 5.5, 0.3),
+                new THREE.MeshStandardMaterial({ color: 0x5a3a2a, roughness: 0.45, metalness: 0.5 })
+            );
+            door.position.set(0, 2.75, 8.2);
+            buildingShells.push(door);
+            buildingGroup.add(door);
+
+            // 门框
+            const doorFrame = new THREE.Mesh(
+                new THREE.BoxGeometry(5, 6, 0.2),
+                new THREE.MeshStandardMaterial({ color: 0x4a5a6a, roughness: 0.45, metalness: 0.6 })
+            );
+            doorFrame.position.set(0, 2.75, 8.1);
+            buildingShells.push(doorFrame);
+            buildingGroup.add(doorFrame);
+
+            // 门上方的半圆窗
+            const fanlightGeom = new THREE.CylinderGeometry(2.5, 2.5, 0.12, 16, 1, false, 0, Math.PI);
+            const fanlight = new THREE.Mesh(fanlightGeom,
+                new THREE.MeshStandardMaterial({ color: 0x99ccff, roughness: 0.03, metalness: 0.05, transparent: true, opacity: 0.7 })
+            );
+            fanlight.position.set(0, 5.5, 8.06);
+            fanlight.rotation.z = Math.PI;
+            buildingGroup.add(fanlight);
+
+            // --- 一楼/二楼分隔线（腰线） ---
+            const beltLine = new THREE.Mesh(
+                new THREE.BoxGeometry(20.3, 0.15, 16.3),
+                new THREE.MeshStandardMaterial({ color: 0x7a8898, roughness: 0.5, metalness: 0.7 })
+            );
+            beltLine.position.y = 6;
+            buildingGroup.add(beltLine);
+
+            // --- 内部书架 ---
+            createBookshelves();
+
+            // --- 图书馆标牌 ---
+            createBuildingSign("图  书  馆", new THREE.Vector3(0, 14.5, 9));
+        }
+
+        function createBookshelves() {
+            const shelfMat = new THREE.MeshStandardMaterial({ color: 0x8B6914, roughness: 0.7, metalness: 0.2 });
+
+            // 一楼书架（靠后区域）
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 2; col++) {
+                    const shelf = new THREE.Mesh(new THREE.BoxGeometry(3, 3.2, 0.4), shelfMat);
+                    shelf.position.set(-4 + row * 4, 1.6, -3 + col * 5);
+                    shelf.castShadow = true; shelf.receiveShadow = true;
+                    shelf.userData.isShelf = true;
+                    buildingShells.push(shelf);
+                    buildingGroup.add(shelf);
+
+                    // 二层书架叠放
+                    if (col === 0) {
+                        const shelf2 = new THREE.Mesh(new THREE.BoxGeometry(3, 3.2, 0.4), shelfMat);
+                        shelf2.position.set(-4 + row * 4, 4.8, -3 + col * 5);
+                        shelf2.castShadow = true; shelf2.receiveShadow = true;
+                        shelf2.userData.isShelf = true;
+                        buildingShells.push(shelf2);
+                        buildingGroup.add(shelf2);
+                    }
+                }
+            }
+
+            // 二楼书架（上半部分）
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 2; col++) {
+                    const shelf = new THREE.Mesh(new THREE.BoxGeometry(3, 3.2, 0.4), shelfMat);
+                    shelf.position.set(-4 + row * 4, 7.6, -3 + col * 5);
+                    shelf.castShadow = true; shelf.receiveShadow = true;
+                    shelf.userData.isShelf = true;
+                    buildingShells.push(shelf);
+                    buildingGroup.add(shelf);
+                }
+            }
+        }
+
+        function createBuildingSign(text, position) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 320; canvas.height = 80;
+
+            ctx.fillStyle = 'rgba(15, 25, 45, 0.9)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#64b5f6';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 36px Microsoft YaHei';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#64b5f6';
+            ctx.shadowBlur = 10;
+            ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const mesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(8, 2),
+                new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false })
+            );
+            mesh.position.copy(position);
+            mesh.userData.isLabel = true;
+            scene.add(mesh);
+        }
+
+        // ========== 传感器（全部在图书馆内） ==========
+        function createSensors() {
+            // 1. 空气质量传感器 —— 一楼大厅入口（门内上方）
+            createSensor('air', '空气质量传感器', 0, 3.5, 7.5, 0x66bb6a);
+
+            // 2. 烟雾传感器 —— 二楼天花板中央
+            createSensor('smoke', '烟雾传感器', 0, 11.8, -2, 0xaaaaaa);
+
+            // 3. CO₂传感器 —— 二楼阅览区中央
+            createSensor('co2', 'CO₂传感器', -4, 8.5, -1, 0x42a5f5);
+
+            // 4. 噪音传感器 —— 一楼阅读区
+            createSensor('noise', '噪音传感器', 5, 3.5, -3, 0xffa726);
+
+            // 5. 温湿度传感器 —— 一楼中央区域
+            createSensor('temp', '温湿度传感器', -5, 3.5, 1, 0xab47bc);
+
+            // 6. 光照强度传感器 —— 二楼南侧窗边
+            createSensor('light-sensor', '光照强度传感器', 6, 8.5, 7, 0xffd740);
+        }
+
+        function createSensor(type, name, x, y, z, color) {
+            const sensorGroup = new THREE.Group();
+
+            // 主体圆柱
+            const body = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.3, 0.65, 24),
+                new THREE.MeshStandardMaterial({ color, metalness: 0.7, roughness: 0.25, emissive: color, emissiveIntensity: 0.3 })
+            );
+            sensorGroup.add(body);
+
+            // 顶部半球
+            const top = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 24, 16),
+                new THREE.MeshStandardMaterial({ color, metalness: 0.8, roughness: 0.2, emissive: color, emissiveIntensity: 0.4, transparent: true, opacity: 0.9 })
+            );
+            top.position.y = 0.32;
+            sensorGroup.add(top);
+
+            // 底座
+            const base = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.35, 0.4, 0.13, 24),
+                new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.8, roughness: 0.3 })
+            );
+            base.position.y = -0.36;
+            sensorGroup.add(base);
+
+            // 状态指示灯环
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(0.33, 0.05, 16, 24),
+                new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.6, roughness: 0.2 })
+            );
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = -0.3;
+            ring.name = 'statusRing';
+            sensorGroup.add(ring);
+
+            // 安装支架
+            const bracket = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.06, 0.06, 0.4, 8),
+                new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.8, roughness: 0.3 })
+            );
+            bracket.position.y = 0.6;
+            sensorGroup.add(bracket);
+
+            sensorGroup.position.set(x, y, z);
+            sensorGroup.userData.type = type;
+            sensorGroup.userData.name = name;
+            sensorGroup.userData.statusRing = ring;
+
+            sensorGroup.traverse(child => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
+
+            scene.add(sensorGroup);
+            sensors.push(sensorGroup);
+
+            // CSS标签
+            const div = document.createElement('div');
+            div.style.cssText = 'color:#fff;background:rgba(15,25,45,0.85);padding:3px 8px;border-radius:4px;font-size:11px;pointer-events:none;white-space:nowrap;border:1px solid rgba(100,180,255,0.5);';
+            div.textContent = name;
+            const label = new THREE.CSS2DObject(div);
+            label.position.set(0, 0.8, 0);
+            sensorGroup.add(label);
+        }
+
+        // ========== 周边环境 ==========
+        function createEnvironment() {
+            // 树木
+            const trees = [
+                [-18,0,-15],[18,0,-15],[-18,0,15],[18,0,15],
+                [-22,0,0],[22,0,0],[-20,0,-22],[20,0,-22],
+                [0,0,-18],[0,0,18],[-20,0,20],[20,0,20],
+                [-24,0,-18],[24,0,-18],[-24,0,18],[24,0,18]
+            ];
+            trees.forEach(([tx,ty,tz]) => createTree(tx,ty,tz));
+
+            // 长凳
+            createBench(-12, 0, 15);
+            createBench(12, 0, 15);
+            createBench(-14, 0, -14);
+            createBench(14, 0, -14);
+
+            // 路灯
+            createLampPost(-16, 0, 10);
+            createLampPost(16, 0, 10);
+            createLampPost(0, 0, -14);
+            createLampPost(-12, 0, -18);
+
+            // 馆前旗杆
+            createFlagPole(0, 0, 11);
+        }
+
+        function createTree(x, y, z) {
+            const grp = new THREE.Group();
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.18, 0.3, 2.2, 8),
+                new THREE.MeshStandardMaterial({ color: 0x6d4c41, roughness: 0.9, metalness: 0.1 })
+            );
+            trunk.position.y = 1.1; trunk.castShadow = true;
+            grp.add(trunk);
+
+            [0x2e7d32, 0x388e3c, 0x43a047].forEach((c, i) => {
+                const crown = new THREE.Mesh(
+                    new THREE.ConeGeometry(1.4 - i * 0.35, 1.6, 8),
+                    new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, metalness: 0.05 })
+                );
+                crown.position.y = 2.2 + i * 1.1;
+                crown.castShadow = true; crown.receiveShadow = true;
+                grp.add(crown);
+            });
+            grp.position.set(x, y, z);
+            scene.add(grp);
+        }
+
+        function createBench(x, y, z) {
+            const grp = new THREE.Group();
+            const seatMat = new THREE.MeshStandardMaterial({ color: 0x795548, roughness: 0.7, metalness: 0.2 });
+            grp.add(new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.13, 0.6), seatMat)).position.y = 0.65;
+
+            const legMat = new THREE.MeshStandardMaterial({ color: 0x5d4037, roughness: 0.8, metalness: 0.3 });
+            [-0.95, 0.95].forEach(lx => {
+                [-0.2, 0.2].forEach(lz => {
+                    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.65, 0.1), legMat);
+                    leg.position.set(lx, 0.32, lz);
+                    leg.castShadow = true;
+                    grp.add(leg);
+                });
+            });
+            grp.position.set(x, y, z);
+            grp.rotation.y = Math.random() * 0.3 - 0.15;
+            scene.add(grp);
+        }
+
+        function createLampPost(x, y, z) {
+            const grp = new THREE.Group();
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.1, 0.13, 4.5, 8),
+                new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.5, metalness: 0.7 })
+            );
+            pole.position.y = 2.25; pole.castShadow = true;
+            grp.add(pole);
+
+            const bulb = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 12, 12),
+                new THREE.MeshStandardMaterial({ color: 0xffeeb8, emissive: 0xffd580, emissiveIntensity: 0.5, roughness: 0.2, metalness: 0.1 })
+            );
+            bulb.position.y = 4.6;
+            grp.add(bulb);
+            grp.position.set(x, y, z);
+            scene.add(grp);
+        }
+
+        function createFlagPole(x, y, z) {
+            const grp = new THREE.Group();
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.08, 0.12, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.3, metalness: 0.8 })
+            );
+            pole.position.y = 4;
+            grp.add(pole);
+
+            const flag = new THREE.Mesh(
+                new THREE.PlaneGeometry(1.2, 0.8),
+                new THREE.MeshStandardMaterial({ color: 0xef5350, roughness: 0.6, side: THREE.DoubleSide })
+            );
+            flag.position.set(0.6, 7.6, 0);
+            flag.castShadow = true;
+            grp.add(flag);
+
+            grp.position.set(x, y, z);
+            scene.add(grp);
+        }
+
+        // ========== 视角按钮 ==========
+        function setupViewButtons() {
+            const buttons = document.querySelectorAll('.view-btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    buttons.forEach(b => b.classList.remove('active-view'));
+                    btn.classList.add('active-view');
+                });
+            });
+
+            document.getElementById('view-overview').addEventListener('click', () => {
+                camera.position.set(0, 30, 50);
+                controls.target.set(0, 5, 0);
+                controls.update();
+            });
+            document.getElementById('view-front').addEventListener('click', () => {
+                camera.position.set(0, 5, 16);
+                controls.target.set(0, 5, 8);
+                controls.update();
+            });
+            document.getElementById('view-floor1').addEventListener('click', () => {
+                camera.position.set(8, 4, 10);
+                controls.target.set(0, 3, 0);
+                controls.update();
+            });
+            document.getElementById('view-floor2').addEventListener('click', () => {
+                camera.position.set(-6, 10, 10);
+                controls.target.set(0, 9, 0);
+                controls.update();
+            });
+            document.getElementById('view-outdoor').addEventListener('click', () => {
+                camera.position.set(22, 10, 24);
+                controls.target.set(0, 5, 0);
+                controls.update();
+            });
+        }
+
+        function setupPanelCollapse() {
+            document.getElementById('collapse-btn').addEventListener('click', function(e) {
+                e.stopPropagation();
+                const panel = document.getElementById('control-panel');
+                const btn = document.getElementById('collapse-btn');
+                if (panel.classList.contains('collapsed')) {
+                    panel.classList.remove('collapsed'); btn.textContent = '◀';
+                } else {
+                    panel.classList.add('collapsed'); btn.textContent = '▶';
+                }
+            });
+        }
+
+        function setupClock() {
+            function tick() {
+                const el = document.getElementById('clock');
+                if (el) el.textContent = new Date().toLocaleString('zh-CN', {
+                    year:'numeric', month:'2-digit', day:'2-digit',
+                    hour:'2-digit', minute:'2-digit', second:'2-digit'
+                });
+            }
+            tick(); setInterval(tick, 1000);
+        }
+
+        // ========== 传感器数据 ==========
+        function loadSensorData() {
+            fetch('/api/v1/sensors/latest')
+                .then(r => r.json())
+                .then(data => updateSensorDisplay(normalizeSensorPayload(data)))
+                .catch(() => updateSensorDisplay(generateMockData()));
+        }
+
+        function normalizeSensorPayload(payload) {
+            if (!payload || !payload.data) return payload || {};
+            const value = (name) => payload.data[name] ? payload.data[name].value : null;
+            return {
+                pm25: value('pm25'),
+                smoke: value('smoke'),
+                CO2: value('co2'),
+                noise: value('noise'),
+                temp: value('temperature'),
+                wet: value('humidity'),
+                light: value('light'),
+            };
+        }
+
+        function generateMockData() {
+            return {
+                pm25: (15 + Math.random() * 25).toFixed(2),
+                smoke: (20 + Math.random() * 80).toFixed(2),
+                CO2: (400 + Math.random() * 600).toFixed(2),
+                noise: (35 + Math.random() * 30).toFixed(2),
+                temp: (20 + Math.random() * 8).toFixed(2),
+                wet: (35 + Math.random() * 30).toFixed(2),
+                light: (200 + Math.random() * 600).toFixed(2),
+            };
+        }
+
+        function updateSensorDisplay(data) {
+            updateSensorPanel('sensor-air', data.pm25, 'μg/m³', 35, 75, v => `PM2.5: ${parseFloat(v).toFixed(1)} μg/m³`);
+            updateSensorPanel('sensor-smoke', data.smoke, 'ppm', 100, 300, v => `${parseFloat(v).toFixed(1)} ppm`);
+            updateSensorPanel('sensor-co2', data.CO2, 'ppm', 800, 1500, v => `${parseFloat(v).toFixed(0)} ppm`);
+            updateSensorPanel('sensor-noise', data.noise, 'dB', 50, 70, v => `${parseFloat(v).toFixed(1)} dB`);
+
+            const el = document.querySelector('#sensor-temp-humid .sensor-value');
+            if (el) {
+                const t = data.temp != null ? parseFloat(data.temp).toFixed(1) : '--';
+                const h = data.wet != null ? parseFloat(data.wet).toFixed(1) : '--';
+                el.textContent = `${t}°C | ${h}% RH`;
+                let ts='normal', hs='normal';
+                if (data.temp != null) { const tv=parseFloat(data.temp); if (tv<16||tv>30) ts='alarm'; else if (tv<18||tv>28) ts='warning'; }
+                if (data.wet != null) { const hv=parseFloat(data.wet); if (hv<30||hv>75) hs='alarm'; else if (hv<35||hv>70) hs='warning'; }
+                updateSensorIndicator('sensor-temp-humid', ts==='alarm'||hs==='alarm'?'alarm':(ts==='warning'||hs==='warning'?'warning':'normal'));
+            }
+
+            updateSensorPanel('sensor-light', data.light, 'lux', 500, 1000, v => `${parseFloat(v).toFixed(0)} lux`);
+            updateSensorRings(data);
+        }
+
+        function updateSensorPanel(eid, value, unit, warnTh, alarmTh, fmt) {
+            const el = document.querySelector(`#${eid} .sensor-value`);
+            if (!el) return;
+            if (value == null) { el.textContent = `-- ${unit}`; updateSensorIndicator(eid, 'normal'); return; }
+            const n = parseFloat(value);
+            el.textContent = fmt(value);
+            updateSensorIndicator(eid, n > alarmTh ? 'alarm' : (n > warnTh ? 'warning' : 'normal'));
+        }
+
+        function updateSensorIndicator(eid, status) {
+            const ind = document.querySelector(`#${eid} .status-indicator`);
+            if (ind) ind.className = `status-indicator status-${status}`;
+        }
+
+        function updateSensorRings(data) {
+            sensors.forEach(s => {
+                const ring = s.userData.statusRing;
+                if (!ring) return;
+                let value, w, a;
+                switch (s.userData.type) {
+                    case 'air': value=parseFloat(data.pm25); w=35; a=75; break;
+                    case 'smoke': value=parseFloat(data.smoke); w=100; a=300; break;
+                    case 'co2': value=parseFloat(data.CO2); w=800; a=1500; break;
+                    case 'noise': value=parseFloat(data.noise); w=50; a=70; break;
+                    case 'temp': value=parseFloat(data.temp); w=28; a=30; break;
+                    case 'light-sensor': value=parseFloat(data.light); w=500; a=1000; break;
+                    default: return;
+                }
+                if (isNaN(value)) {
+                    ring.material.color.setHex(0x00ff00); ring.material.emissive.setHex(0x00ff00); ring.material.emissiveIntensity = 0.4;
+                } else if (value > a) {
+                    ring.material.color.setHex(0xff0000); ring.material.emissive.setHex(0xff0000); ring.material.emissiveIntensity = 0.9;
+                } else if (value > w) {
+                    ring.material.color.setHex(0xffaa00); ring.material.emissive.setHex(0xffaa00); ring.material.emissiveIntensity = 0.7;
+                } else {
+                    ring.material.color.setHex(0x00ff00); ring.material.emissive.setHex(0x00ff00); ring.material.emissiveIntensity = 0.5;
+                }
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const t = Date.now() * 0.003;
+
+            sensors.forEach(s => {
+                const ring = s.userData.statusRing;
+                if (!ring) return;
+                const bi = ring.material.emissiveIntensity;
+                ring.material.emissiveIntensity = bi > 0.6
+                    ? bi + Math.sin(t * 3) * 0.2
+                    : bi + Math.sin(t * 1.5) * 0.08;
+                // 传感器顶部旋转
+                if (s.children[1]) s.children[1].rotation.y += 0.004;
+            });
+
+            scene.traverse(obj => { if (obj.userData && obj.userData.isLabel) obj.lookAt(camera.position); });
+
+            controls.update();
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

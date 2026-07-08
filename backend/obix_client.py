@@ -69,8 +69,8 @@ class ObixClient:
         raise ValueError("oBIX response did not contain a val attribute")
 
     def write_point(self, point_name: str, value: Any, kind: str) -> None:
-        # BooleanWritable 点需要通过 /set/ 子路径写入
-        set_suffix = "/set/" if kind == "bool" else ""
+        # Writable oBIX points are controlled through their set action.
+        set_suffix = "/set/" if kind in {"bool", "real", "int"} else ""
         payload = self._build_payload(value=value, kind=kind)
         self._send_request(
             url=self._point_url(point_name).rstrip("/") + set_suffix,
@@ -103,7 +103,7 @@ class ObixClient:
             bool_value = str(bool(value)).lower()
             return f'<bool val="{bool_value}"/>'
         if kind == "real":
-            return f'<real name="out" val="{float(value)}"/>'
+            return f'<real val="{float(value)}"/>'
         if kind == "int":
             return f'<int name="out" val="{int(value)}"/>'
         raise ValueError(f"Unsupported oBIX value kind: {kind}")

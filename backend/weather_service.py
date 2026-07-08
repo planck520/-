@@ -18,7 +18,11 @@ class WeatherService:
             return self._cache
 
         if not config.WEATHER_API_KEY:
-            self._cache = {"enabled": False, "source": "disabled"}
+            self._cache = {
+                "enabled": False,
+                "source": "disabled",
+                "message": "WEATHER_API_KEY 未配置",
+            }
             self._cache_until = now + config.WEATHER_CACHE_SECONDS
             return self._cache
 
@@ -34,9 +38,41 @@ class WeatherService:
                 "temperature": payload.get("main", {}).get("temp"),
                 "humidity": payload.get("main", {}).get("humidity"),
                 "condition": payload.get("weather", [{}])[0].get("description"),
+                "city": payload.get("name") or config.WEATHER_CITY,
             }
-        except (error.URLError, TimeoutError, json.JSONDecodeError):
-            self._cache = {"enabled": False, "source": "fallback"}
+        except error.HTTPError as exc:
+            self._cache = {
+                "enabled": False,
+                "source": "openweather_error",
+                "status": exc.code,
+                "message": self._read_http_error(exc),
+            }
+        except error.URLError as exc:
+            self._cache = {
+                "enabled": False,
+                "source": "network_error",
+                "message": str(exc.reason),
+            }
+        except TimeoutError:
+            self._cache = {
+                "enabled": False,
+                "source": "timeout",
+                "message": "OpenWeather 请求超时",
+            }
+        except json.JSONDecodeError:
+            self._cache = {
+                "enabled": False,
+                "source": "bad_response",
+                "message": "OpenWeather 返回内容无法解析",
+            }
 
         self._cache_until = now + config.WEATHER_CACHE_SECONDS
         return self._cache
+
+    @staticmethod
+    def _read_http_error(exc: error.HTTPError) -> str:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return f"OpenWeather HTTP {exc.code}"
+        return payload.get("message") or f"OpenWeather HTTP {exc.code}"

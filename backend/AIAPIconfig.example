@@ -1,0 +1,14 @@
+# Copy this file to AIAPIconfig and fill in your real values.
+# AIAPIconfig is ignored by git.
+
+LLM_ENABLED=true
+LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=your_api_key_here
+LLM_TIMEOUT_SECONDS=8
+
+WEATHER_API_KEY=your_openweather_api_key_here
+WEATHER_CITY=Wuhan,cn
+
+# Optional alias also supported:
+# DEEPSEEK_API_KEY=your_api_key_here

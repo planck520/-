@@ -78,6 +78,14 @@ class DatabaseManager:
                     threshold REAL
                 );
 
+                CREATE TABLE IF NOT EXISTS assistant_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    context TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_readings_sensor_time
                 ON sensor_readings(sensor_name, timestamp);
 
@@ -86,6 +94,12 @@ class DatabaseManager:
 
                 CREATE INDEX IF NOT EXISTS idx_alerts_active
                 ON alerts(type, resolved_at);
+
+                CREATE INDEX IF NOT EXISTS idx_device_events_time
+                ON device_events(timestamp);
+
+                CREATE INDEX IF NOT EXISTS idx_assistant_messages_time
+                ON assistant_messages(timestamp);
                 """
             )
 
@@ -239,13 +253,108 @@ class DatabaseManager:
             ).fetchone()
         return None if row is None else row["reasoning"]
 
-    def get_energy_summary(self, range_name: str) -> dict[str, Any]:
+    def get_device_events(self, limit: int = 50, device_name: str | None = None) -> list[dict[str, Any]]:
+        limit = max(1, min(500, int(limit)))
+        params: list[Any] = []
+        where_clause = ""
+        if device_name:
+            where_clause = "WHERE device_name = ?"
+            params.append(device_name)
+        params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT timestamp, device_name, action, value, source
+                FROM device_events
+                {where_clause}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        events = []
+        for row in rows:
+            try:
+                value = json.loads(row["value"]) if row["value"] else None
+            except json.JSONDecodeError:
+                value = row["value"]
+            events.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "device": row["device_name"],
+                    "action": row["action"],
+                    "value": value,
+                    "source": row["source"],
+                }
+            )
+        return events
+
+    def log_assistant_message(
+        self,
+        timestamp: str,
+        role: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO assistant_messages (timestamp, role, message, context)
+                VALUES (?, ?, ?, ?)
+                """,
+                (timestamp, role, message, json.dumps(context or {}, ensure_ascii=False)),
+            )
+
+    def get_assistant_messages(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(200, int(limit)))
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT timestamp, role, message, context
+                FROM assistant_messages
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        messages = []
+        for row in reversed(rows):
+            try:
+                context = json.loads(row["context"]) if row["context"] else {}
+            except json.JSONDecodeError:
+                context = {}
+            messages.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "role": row["role"],
+                    "message": row["message"],
+                    "context": context,
+                }
+            )
+        return messages
+
+    @staticmethod
+    def _energy_range_bounds(range_name: str) -> tuple[datetime, datetime, float]:
         if range_name not in config.ENERGY_RANGE_TO_HOURS:
             raise ValueError("Unsupported range")
 
         now = datetime.now().astimezone()
-        hours = config.ENERGY_RANGE_TO_HOURS[range_name]
-        start = now - timedelta(hours=hours)
+        if range_name == "day":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start = now - timedelta(hours=config.ENERGY_RANGE_TO_HOURS[range_name])
+
+        elapsed_hours = max((now - start).total_seconds() / 3600.0, 0.0)
+        return start, now, elapsed_hours
+
+    @staticmethod
+    def _bounded_sample_interval_seconds(current_ts: datetime, next_ts: datetime) -> float:
+        interval_seconds = max(0.0, (next_ts - current_ts).total_seconds())
+        max_interval_seconds = max(float(config.POLL_INTERVAL_SECONDS) * 3.0, 10.0)
+        return min(interval_seconds, max_interval_seconds)
+
+    def get_energy_summary(self, range_name: str) -> dict[str, Any]:
+        start, now, elapsed_hours = self._energy_range_bounds(range_name)
         with self._connection() as conn:
             rows = conn.execute(
                 """
@@ -269,20 +378,23 @@ class DatabaseManager:
                 next_ts = points[index + 1][0]
             else:
                 next_ts = min(now, current_ts + timedelta(seconds=config.POLL_INTERVAL_SECONDS))
-            interval_seconds = max(0.0, (next_ts - current_ts).total_seconds())
+            interval_seconds = self._bounded_sample_interval_seconds(current_ts, next_ts)
             total_wh += current_value * interval_seconds / 3600.0
             if current_value > 0.1:
                 runtime_seconds += interval_seconds
 
         total_kwh = total_wh / 1000.0
-        avg_power_w = total_wh / hours if hours else 0.0
-        always_on_kwh = config.FAN_ALWAYS_ON_POWER_W * hours / 1000.0
+        avg_power_w = total_wh / elapsed_hours if elapsed_hours else 0.0
+        always_on_kwh = config.FAN_ALWAYS_ON_POWER_W * elapsed_hours / 1000.0
         saving_percent = 0.0
         if always_on_kwh > 0:
             saving_percent = max(0.0, (always_on_kwh - total_kwh) / always_on_kwh * 100.0)
 
         return {
             "range": range_name,
+            "start": start.isoformat(timespec="seconds"),
+            "end": now.isoformat(timespec="seconds"),
+            "elapsed_hours": round(elapsed_hours, 2),
             "total_energy_kwh": round(total_kwh, 3),
             "fan_runtime_minutes": int(runtime_seconds / 60.0),
             "avg_power_w": round(avg_power_w, 1),
@@ -295,4 +407,43 @@ class DatabaseManager:
                 "always_on_kwh": round(always_on_kwh, 3),
                 "saving_percent": round(saving_percent, 1),
             },
+        }
+
+    def get_energy_timeseries(self, range_name: str) -> dict[str, Any]:
+        start, now, _elapsed_hours = self._energy_range_bounds(range_name)
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT timestamp, value
+                FROM sensor_readings
+                WHERE sensor_name = 'fan_power' AND timestamp >= ?
+                ORDER BY timestamp ASC
+                """,
+                (start.isoformat(timespec="seconds"),),
+            ).fetchall()
+
+        points = [
+            (datetime.fromisoformat(row["timestamp"]), float(row["value"]))
+            for row in rows
+        ]
+        data: list[dict[str, Any]] = []
+        total_wh = 0.0
+        for index, (current_ts, current_value) in enumerate(points):
+            if index > 0:
+                previous_ts, previous_value = points[index - 1]
+                interval_seconds = self._bounded_sample_interval_seconds(previous_ts, current_ts)
+                total_wh += previous_value * interval_seconds / 3600.0
+            data.append(
+                {
+                    "ts": current_ts.isoformat(timespec="seconds"),
+                    "fan_power_w": round(current_value, 2),
+                    "cumulative_kwh": round(total_wh / 1000.0, 5),
+                }
+            )
+
+        return {
+            "range": range_name,
+            "start": start.isoformat(timespec="seconds"),
+            "end": now.isoformat(timespec="seconds"),
+            "data": data,
         }

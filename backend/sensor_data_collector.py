@@ -53,7 +53,10 @@ class SensorDataCollector:
         noise = 38.0 + (14.0 if occupied else 3.0) + abs(math.sin(tick * 3.0)) * 6.0
         smoke = 8.0 + abs(math.sin(tick / 2.5)) * 4.0
         pm25 = 20.0 + (18.0 if occupied else 4.0) + abs(math.sin(tick / 1.7)) * 8.0
-        fan_should_run = temperature >= 26.0 or co2 >= config.CO2_COMFORT_MAX
+        fan_should_run = (
+            temperature >= config.PROFILES[config.DEFAULT_PROFILE]["fan_on_above_c"]
+            or co2 >= config.CO2_COMFORT_MAX
+        )
         fan_current = 0.34 if fan_should_run else 0.0
         fan_power = fan_current * config.FAN_VOLTAGE
         return {

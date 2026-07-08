@@ -4,3 +4,7 @@ __pycache__/
 _test_encoding.py
 test_led.py
 setup_remote.py
+AIAPIconfig
+backend/AIAPIconfig
+!AIAPIconfig.example
+!backend/AIAPIconfig.example

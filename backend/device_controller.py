@@ -24,8 +24,8 @@ class DeviceController:
         self.weather_service = weather_service
         self.active_profile = config.DEFAULT_PROFILE
         self.device_status = {
-            "buzzer": {"state": False, "trigger": None},
-            "warning_led": {"state": False, "trigger": None},
+            "buzzer": {"state": False, "trigger": None, "mode": "auto"},
+            "warning_led": {"state": False, "trigger": None, "mode": "auto"},
             "lighting_led": {"state": False, "brightness": 0, "mode": "auto"},
             "fan": {"state": False, "mode": "auto"},
         }
@@ -37,6 +37,7 @@ class DeviceController:
         self._noise_below_since: datetime | None = None
         self._smoke_below_since: datetime | None = None
         self._last_decision_signature: tuple[int, bool, str] | None = None
+        self._last_comfort_source = "fsm_fallback"
 
     def update(
         self,
@@ -50,12 +51,19 @@ class DeviceController:
         self.degraded = data_source != "obix"
         self._apply_safety_rules(current_time=current_time, timestamp=timestamp, snapshot=snapshot)
         self._apply_comfort_control(timestamp=timestamp, snapshot=snapshot, fsm_state=fsm_state)
+        manual_devices = [
+            name
+            for name, status in self.device_status.items()
+            if status.get("mode") == "manual"
+        ]
         if self.database.get_active_alerts():
             self.ai_mode = "emergency_override"
-        elif self.device_status["lighting_led"]["mode"] == "auto" or self.device_status["fan"]["mode"] == "auto":
-            self.ai_mode = "fsm_fallback"
-        else:
+        elif manual_devices:
             self.ai_mode = "manual_override"
+        elif self._last_comfort_source == "llm_advice":
+            self.ai_mode = "llm_advice"
+        else:
+            self.ai_mode = "fsm_fallback"
         self.database.log_fsm_state(timestamp=timestamp, state=fsm_state, score=fsm_score)
 
     def get_device_status(self) -> dict[str, Any]:
@@ -64,6 +72,7 @@ class DeviceController:
     def get_system_control_state(self) -> dict[str, Any]:
         return {
             "active_profile": self.active_profile,
+            "active_profile_config": config.PROFILES[self.active_profile],
             "ai_mode": self.ai_mode,
             "last_llm_decision": self.last_llm_decision,
             "degraded": self.degraded,
@@ -80,9 +89,13 @@ class DeviceController:
             raise ValueError("Unsupported device")
 
         if device in {"buzzer", "warning_led"}:
-            desired_state = action == "on"
+            if action == "auto":
+                self.device_status[device]["mode"] = "auto"
+                return self.device_status[device]
             if action not in {"on", "off"}:
                 raise ValueError("Unsupported action")
+            desired_state = action == "on"
+            self.device_status[device]["mode"] = "manual"
             self._set_bool_device(
                 timestamp=timestamp,
                 device=device,
@@ -142,25 +155,27 @@ class DeviceController:
                 sensor_value=smoke_value,
                 threshold=config.SMOKE_THRESHOLD,
             )
-            self._set_bool_device(
-                timestamp=timestamp,
-                device="buzzer",
-                desired_state=True,
-                source="safety_rule",
-                trigger="smoke_warning",
-            )
+            if self.device_status["buzzer"]["mode"] == "auto":
+                self._set_bool_device(
+                    timestamp=timestamp,
+                    device="buzzer",
+                    desired_state=True,
+                    source="safety_rule",
+                    trigger="smoke_warning",
+                )
         elif smoke_value <= config.SMOKE_THRESHOLD - config.SMOKE_HYSTERESIS:
             if self._smoke_below_since is None:
                 self._smoke_below_since = current_time
             if (current_time - self._smoke_below_since).total_seconds() >= config.SMOKE_CLEAR_DELAY_SECONDS:
                 self.database.resolve_alert(timestamp=timestamp, alert_type="smoke_warning")
-                self._set_bool_device(
-                    timestamp=timestamp,
-                    device="buzzer",
-                    desired_state=False,
-                    source="safety_rule",
-                    trigger=None,
-                )
+                if self.device_status["buzzer"]["mode"] == "auto":
+                    self._set_bool_device(
+                        timestamp=timestamp,
+                        device="buzzer",
+                        desired_state=False,
+                        source="safety_rule",
+                        trigger=None,
+                    )
 
         if noise_value >= config.NOISE_THRESHOLD:
             self._noise_below_since = None
@@ -175,63 +190,101 @@ class DeviceController:
                     sensor_value=noise_value,
                     threshold=config.NOISE_THRESHOLD,
                 )
-                self._set_bool_device(
-                    timestamp=timestamp,
-                    device="warning_led",
-                    desired_state=True,
-                    source="safety_rule",
-                    trigger="noise_warning",
-                )
+                if self.device_status["warning_led"]["mode"] == "auto":
+                    self._set_bool_device(
+                        timestamp=timestamp,
+                        device="warning_led",
+                        desired_state=True,
+                        source="safety_rule",
+                        trigger="noise_warning",
+                    )
         elif noise_value <= config.NOISE_THRESHOLD - config.NOISE_HYSTERESIS:
             self._noise_above_since = None
             if self._noise_below_since is None:
                 self._noise_below_since = current_time
             if (current_time - self._noise_below_since).total_seconds() >= config.NOISE_CLEAR_DURATION_SECONDS:
                 self.database.resolve_alert(timestamp=timestamp, alert_type="noise_warning")
-                self._set_bool_device(
-                    timestamp=timestamp,
-                    device="warning_led",
-                    desired_state=False,
-                    source="safety_rule",
-                    trigger=None,
-                )
+                if self.device_status["warning_led"]["mode"] == "auto":
+                    self._set_bool_device(
+                        timestamp=timestamp,
+                        device="warning_led",
+                        desired_state=False,
+                        source="safety_rule",
+                        trigger=None,
+                    )
 
     def _apply_comfort_control(self, timestamp: str, snapshot: dict[str, float], fsm_state: str) -> None:
-        decision = self.llm_service.decide(
+        profile = config.PROFILES[self.active_profile]
+        rule_brightness = self._rule_lighting_brightness(snapshot=snapshot, profile=profile)
+        rule_fan_state = self._guard_fan_state(
+            current_state=self.device_status["fan"]["state"],
             snapshot=snapshot,
-            fsm_state=fsm_state,
-            profile_name=self.active_profile,
-            weather=self.weather_service.get_current_weather(),
+            profile=profile,
         )
-        self.last_llm_decision = decision.reasoning
-        decision_signature = (decision.lighting_brightness, decision.fan_state, fsm_state)
-        if decision_signature != self._last_decision_signature:
-            self.database.log_llm_decision(
-                timestamp=timestamp,
-                fsm_state=fsm_state,
-                reasoning=decision.reasoning,
-                actions={
-                    "lighting_brightness": decision.lighting_brightness,
-                    "fan_state": decision.fan_state,
-                    "source": decision.source,
-                },
-            )
-            self._last_decision_signature = decision_signature
 
         if self.device_status["lighting_led"]["mode"] == "auto":
             self._set_lighting(
                 timestamp=timestamp,
-                brightness=decision.lighting_brightness,
-                source=decision.source,
+                brightness=rule_brightness,
+                source="local_rule",
             )
         if self.device_status["fan"]["mode"] == "auto":
             self._set_bool_device(
                 timestamp=timestamp,
                 device="fan",
-                desired_state=decision.fan_state,
-                source=decision.source,
+                desired_state=rule_fan_state,
+                source="local_rule",
                 trigger=fsm_state.lower(),
             )
+
+        advice = self.llm_service.decide(
+            snapshot=snapshot,
+            fsm_state=fsm_state,
+            profile_name=self.active_profile,
+            weather=self.weather_service.get_current_weather(),
+        )
+        self.last_llm_decision = (
+            f"{advice.reasoning} 本地规则实际执行：照明 {rule_brightness}%，"
+            f"风扇{'开启' if rule_fan_state else '关闭'}。LLM 仅作为天气/环境建议，不直接控制硬件。"
+        )
+        self._last_comfort_source = "llm_advice" if advice.source == "llm" else "fsm_fallback"
+        decision_signature = (rule_brightness, rule_fan_state, fsm_state)
+        if decision_signature != self._last_decision_signature:
+            self.database.log_llm_decision(
+                timestamp=timestamp,
+                fsm_state=fsm_state,
+                reasoning=self.last_llm_decision,
+                actions={
+                    "lighting_brightness": rule_brightness,
+                    "fan_state": rule_fan_state,
+                    "source": "local_rule",
+                    "llm_advice_source": advice.source,
+                    "llm_advice_only": True,
+                },
+            )
+            self._last_decision_signature = decision_signature
+
+    def _rule_lighting_brightness(self, snapshot: dict[str, float], profile: dict[str, Any]) -> int:
+        if snapshot["light"] >= profile["light_on_below_lux"]:
+            return 0
+        return int(max(0, min(100, profile["lighting_brightness"])))
+
+    def _guard_fan_state(
+        self,
+        current_state: bool,
+        snapshot: dict[str, float],
+        profile: dict[str, Any],
+    ) -> bool:
+        temperature = snapshot["temperature"]
+        co2 = snapshot["co2"]
+        temp_on = profile["fan_on_above_c"]
+        temp_off = temp_on - config.FAN_TEMP_HYSTERESIS
+
+        if temperature >= temp_on or co2 >= config.CO2_COMFORT_MAX:
+            return True
+        if temperature <= temp_off and co2 <= config.CO2_FAN_OFF_BELOW:
+            return False
+        return bool(current_state)
 
     def _set_lighting(self, timestamp: str, brightness: int, source: str) -> None:
         desired_state = brightness > 0
@@ -241,12 +294,19 @@ class DeviceController:
         current["brightness"] = brightness
         current["state"] = desired_state
         analog_value = round(brightness / 100.0 * config.LIGHTING_ANALOG_MAX, 2)
+        point_meta = config.DEVICE_POINTS["lighting_led"]
+        write_value = desired_state if point_meta["kind"] == "bool" else analog_value
         self._write_obix_value(
             device="lighting_led",
-            value=analog_value,
+            value=write_value,
             source=source,
             event_action="set_brightness",
-            event_value={"brightness": brightness, "analog_value": analog_value},
+            event_value={
+                "brightness": brightness,
+                "analog_value": analog_value,
+                "physical_value": write_value,
+                "point_kind": point_meta["kind"],
+            },
         )
 
     def _set_bool_device(
@@ -281,7 +341,7 @@ class DeviceController:
     ) -> None:
         point_meta = config.DEVICE_POINTS[device]
         try:
-            if not config.SIMULATION_MODE:
+            if not config.SIMULATION_MODE and point_meta.get("installed", True):
                 self.obix_client.write_point(
                     point_name=point_meta["point_name"],
                     value=value,

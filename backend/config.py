@@ -17,6 +17,20 @@ def _env_bool(*names: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _load_local_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def _is_placeholder_host(host: str) -> bool:
     normalized = host.strip().lower()
     return normalized in {"192.168.x.x", "<jace_ip>", "jace_ip", "localhost"}
@@ -24,6 +38,7 @@ def _is_placeholder_host(host: str) -> bool:
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "cloud_controller.db"
+_load_local_env_file(BASE_DIR / "AIAPIconfig")
 
 HOST = _env("IOT_HOST", "HOST", default="0.0.0.0")
 PORT = int(_env("IOT_PORT", "PORT", default="5000"))
@@ -53,7 +68,9 @@ LLM_ENABLED = _env_bool("LLM_ENABLED", default=False)
 LLM_MODEL = _env("LLM_MODEL", default="deepseek-chat")
 LLM_BASE_URL = _env("LLM_BASE_URL")
 LLM_API_KEY = _env("LLM_API_KEY", "DEEPSEEK_API_KEY")
+LLM_TIMEOUT_SECONDS = float(_env("LLM_TIMEOUT_SECONDS", default="8"))
 
+BUZZER_INSTALLED = _env_bool("BUZZER_INSTALLED", default=False)
 DEFAULT_PROFILE = _env("DEFAULT_PROFILE", default="balanced")
 FAN_VOLTAGE = float(_env("FAN_VOLTAGE", default="24.0"))
 FAN_ALWAYS_ON_POWER_W = float(_env("FAN_ALWAYS_ON_POWER_W", default="24.0"))
@@ -65,11 +82,13 @@ LIGHTING_ANALOG_MAX = float(_env("LIGHTING_ANALOG_MAX", default="10.0"))
 SMOKE_THRESHOLD = float(_env("SMOKE_THRESHOLD", default="150"))
 SMOKE_HYSTERESIS = float(_env("SMOKE_HYSTERESIS", default="20"))
 SMOKE_CLEAR_DELAY_SECONDS = int(_env("SMOKE_CLEAR_DELAY_SECONDS", default="5"))
-NOISE_THRESHOLD = float(_env("NOISE_THRESHOLD", default="55"))
-NOISE_HYSTERESIS = float(_env("NOISE_HYSTERESIS", default="3"))
-NOISE_DURATION_SECONDS = int(_env("NOISE_DURATION_SECONDS", default="3"))
-NOISE_CLEAR_DURATION_SECONDS = int(_env("NOISE_CLEAR_DURATION_SECONDS", default="10"))
-CO2_COMFORT_MAX = float(_env("CO2_COMFORT_MAX", default="1000"))
+NOISE_THRESHOLD = float(_env("NOISE_THRESHOLD", default="65"))
+NOISE_HYSTERESIS = float(_env("NOISE_HYSTERESIS", default="7"))
+NOISE_DURATION_SECONDS = int(_env("NOISE_DURATION_SECONDS", default="10"))
+NOISE_CLEAR_DURATION_SECONDS = int(_env("NOISE_CLEAR_DURATION_SECONDS", default="20"))
+CO2_COMFORT_MAX = float(_env("CO2_COMFORT_MAX", default="1200"))
+CO2_FAN_OFF_BELOW = float(_env("CO2_FAN_OFF_BELOW", default="900"))
+FAN_TEMP_HYSTERESIS = float(_env("FAN_TEMP_HYSTERESIS", default="1.0"))
 
 FSM_ENTER_OCCUPIED = float(_env("FSM_ENTER_OCCUPIED", default="0.70"))
 FSM_EXIT_OCCUPIED = float(_env("FSM_EXIT_OCCUPIED", default="0.30"))
@@ -115,20 +134,23 @@ DEVICE_POINTS = {
     "fan": {"point_name": "风扇开关", "kind": "bool"},
 }
 
+DEVICE_POINTS["lighting_led"].update({"point_name": "\u7167\u660eLED", "kind": "bool"})
+DEVICE_POINTS["buzzer"]["installed"] = BUZZER_INSTALLED
+
 PROFILES = {
     "energy_saving": {
-        "fan_on_above_c": 28.0,
-        "light_on_below_lux": 200.0,
+        "fan_on_above_c": 30.0,
+        "light_on_below_lux": 100.0,
         "lighting_brightness": 50,
     },
     "comfort": {
-        "fan_on_above_c": 24.0,
-        "light_on_below_lux": 500.0,
+        "fan_on_above_c": 26.5,
+        "light_on_below_lux": 200.0,
         "lighting_brightness": 80,
     },
     "balanced": {
-        "fan_on_above_c": 26.0,
-        "light_on_below_lux": 300.0,
+        "fan_on_above_c": 28.0,
+        "light_on_below_lux": 150.0,
         "lighting_brightness": 60,
     },
 }

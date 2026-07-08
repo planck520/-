@@ -11,6 +11,10 @@ from typing import Any
 import config
 from main import BackendRuntime
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def print_line(message: str = "") -> None:
     print(message)
@@ -73,9 +77,15 @@ def run_api_checks(runtime: BackendRuntime) -> None:
     routes = [
         "/api/v1/sensors/latest",
         "/api/v1/devices/status",
+        "/api/v1/devices/events",
         "/api/v1/system/status",
+        "/api/v1/system/profiles",
+        "/api/v1/shortcuts",
         "/api/v1/energy/summary?range=day",
+        "/api/v1/energy/timeseries?range=day",
         "/api/v1/alerts",
+        "/api/v1/assistant/quick-prompts",
+        "/api/v1/assistant/history",
     ]
     for route in routes:
         response = client.get(route)
@@ -86,6 +96,37 @@ def run_api_checks(runtime: BackendRuntime) -> None:
     if response.status_code != 200:
         raise AssertionError("POST /api/v1/system/profile failed")
 
+    response = client.post(
+        "/api/v1/devices/control",
+        json={"device": "fan", "action": "auto"},
+    )
+    if response.status_code != 200:
+        raise AssertionError("POST /api/v1/devices/control failed")
+
+    shortcut_checks = [
+        {"action": "set_fsm", "params": {"state": "OCCUPIED"}},
+        {"action": "clear_fsm"},
+        {"action": "trigger_alert", "params": {"type": "noise_warning"}},
+        {"action": "clear_alert", "params": {"type": "noise_warning"}},
+        {"action": "control_device", "params": {"device": "fan", "device_action": "on"}},
+        {"action": "control_device", "params": {"device": "fan", "device_action": "off"}},
+        {"action": "control_device", "params": {"device": "lighting_led", "device_action": "set_brightness", "value": 100}},
+        {"action": "control_device", "params": {"device": "lighting_led", "device_action": "set_brightness", "value": 0}},
+        {"action": "set_demo_mode", "params": {"enabled": True}},
+        {"action": "toggle_demo_mode"},
+    ]
+    for payload in shortcut_checks:
+        response = client.post("/api/v1/shortcuts/action", json=payload)
+        if response.status_code != 200:
+            raise AssertionError(f"POST /api/v1/shortcuts/action failed for {payload}")
+
+    response = client.post(
+        "/api/v1/assistant/chat",
+        json={"message": "分析当前环境数据"},
+    )
+    if response.status_code != 200:
+        raise AssertionError("POST /api/v1/assistant/chat failed")
+
     print_line("[INFO] API checks passed")
 
 
@@ -94,8 +135,15 @@ def apply_manual_control(runtime: BackendRuntime, args: argparse.Namespace) -> N
         return
 
     if args.control_device == "lighting_led":
+        if args.action == "auto":
+            result = runtime.control_device("lighting_led", "auto", args.value)
+            print_mapping("Manual Control Result", result)
+            time.sleep(args.post_control_wait)
+            print_mapping("Device Status After Control", runtime.get_device_status())
+            print_mapping("Physical Device State Readback", runtime.read_physical_device_states())
+            return
         if args.action != "set_brightness":
-            raise ValueError("lighting_led requires --action set_brightness")
+            raise ValueError("lighting_led requires --action set_brightness or auto")
         if args.value is None:
             raise ValueError("lighting_led set_brightness requires --value")
         result = runtime.control_device("lighting_led", "set_brightness", args.value)

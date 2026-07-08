@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>慧阅 AI 低碳智控系统</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <canvas id="three-background" aria-hidden="true"></canvas>
+
+  <div class="titlebar">
+    <div class="titlebar-brand">
+      <span class="brand-mark">HY</span>
+      <span class="brand-title">慧阅 AI 低碳智控系统</span>
+      <span class="brand-subtitle">JACE8000 / oBIX / LLM Advice</span>
+    </div>
+    <div class="titlebar-status">
+      <span id="clock">--:--:--</span>
+      <span id="connection-pill" class="pill danger">后端未连接</span>
+    </div>
+  </div>
+
+  <div id="app-shell">
+    <aside id="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">阅</div>
+        <div>
+          <div class="logo-text">慧阅智控</div>
+          <div class="logo-sub">Library IoT Console</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section-label">Main</div>
+      <nav class="sidebar-nav">
+        <a href="#dashboard" data-page="dashboard" class="active"><span class="nav-icon">▦</span>主控看板</a>
+        <a href="#assistant" data-page="assistant"><span class="nav-icon">AI</span>AI 助手</a>
+        <a href="#model" data-page="model"><span class="nav-icon">3D</span>3D 模型</a>
+        <a href="#history" data-page="history"><span class="nav-icon">⌁</span>历史趋势</a>
+        <a href="#energy" data-page="energy"><span class="nav-icon">↯</span>能耗分析</a>
+      </nav>
+
+      <div class="sidebar-section-label">Demo</div>
+      <div class="shortcut-panel">
+        <button class="ghost-button" id="demo-toggle">切换 Demo</button>
+        <button class="ghost-button" data-shortcut="set_fsm" data-state="VACANT">无人模式</button>
+        <button class="ghost-button" data-shortcut="set_fsm" data-state="OCCUPIED">占用模式</button>
+      </div>
+
+      <div class="sidebar-footer">
+        <div id="active-profile-side">balanced</div>
+        <div class="muted">快捷键：1/2/3/4/0, f/F, l/L, w/W, b/B</div>
+      </div>
+    </aside>
+
+    <main id="content">
+      <section id="page-dashboard" class="page-section active">
+        <div id="alert-banner" class="alert-banner hidden"></div>
+
+        <div class="top-grid">
+          <section class="panel hero-panel">
+            <div>
+              <div class="eyebrow">实时运行态</div>
+              <h1>图书馆环境主控台</h1>
+              <p id="last-decision">等待后端建议数据...</p>
+            </div>
+            <div class="hero-metrics">
+              <div>
+                <span class="metric-label">AI 状态</span>
+                <strong id="ai-mode">--</strong>
+              </div>
+              <div>
+                <span class="metric-label">运行时长</span>
+                <strong id="uptime">--</strong>
+              </div>
+              <div>
+                <span class="metric-label">天气</span>
+                <strong id="weather">待接入</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="panel-head">
+              <h2>偏好模式</h2>
+              <span id="profile-active" class="tag">--</span>
+            </div>
+            <div id="profile-switcher" class="segmented"></div>
+            <div id="profile-detail" class="profile-detail muted">加载中...</div>
+          </section>
+        </div>
+
+        <section class="sensor-grid" id="sensor-grid"></section>
+
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>空间状态 FSM</h2>
+              <span id="fsm-score" class="tag">score --</span>
+            </div>
+            <div class="fsm-track" id="fsm-track"></div>
+            <div class="quick-actions">
+              <button data-shortcut="set_fsm" data-state="VACANT">1 无人</button>
+              <button data-shortcut="set_fsm" data-state="ARRIVING">2 进入</button>
+              <button data-shortcut="set_fsm" data-state="OCCUPIED">3 占用</button>
+              <button data-shortcut="set_fsm" data-state="LEAVING">4 离开</button>
+              <button data-shortcut="clear_fsm">0 清除覆盖</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>设备控制</h2>
+              <span class="tag">手动覆盖 / 自动恢复</span>
+            </div>
+            <div class="device-grid" id="device-grid"></div>
+          </section>
+        </div>
+
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>告警与预案</h2>
+              <button id="clear-alerts" class="text-button">清除告警</button>
+            </div>
+            <div id="alerts-list" class="list-empty">暂无活动告警</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>最近设备事件</h2>
+              <button id="refresh-events" class="text-button">刷新</button>
+            </div>
+            <div id="device-events" class="event-list">等待数据...</div>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-assistant" class="page-section">
+        <div class="assistant-layout">
+          <section class="panel chat-panel">
+            <div class="panel-head">
+              <h2>AI 对话助手</h2>
+              <span id="voice-state" class="tag">语音待命</span>
+            </div>
+            <div id="chat-log" class="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <button type="button" id="voice-button" title="语音输入">◉</button>
+              <textarea id="chat-input" rows="2" placeholder="输入问题，例如：分析当前环境数据"></textarea>
+              <button type="button" id="stop-chat" class="danger-button hidden">停止</button>
+              <button type="submit">发送</button>
+            </form>
+          </section>
+
+          <aside class="panel assistant-side">
+            <div class="panel-head">
+              <h2>快捷提问</h2>
+            </div>
+            <div id="quick-prompts" class="quick-prompt-list"></div>
+            <div class="assistant-context">
+              <h3>上下文</h3>
+              <div id="assistant-context">等待系统状态...</div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="page-model" class="page-section">
+        <section class="panel model-panel">
+          <iframe
+            id="model-frame"
+            class="model-frame"
+            src="3d.html"
+            title="图书馆 3D 可视化模型"
+          ></iframe>
+        </section>
+      </section>
+
+      <section id="page-history" class="page-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>历史趋势</h2>
+            <div class="toolbar">
+              <div class="segmented" id="history-ranges">
+                <button data-range="1">1h</button>
+                <button data-range="6">6h</button>
+                <button data-range="24" class="active">24h</button>
+                <button data-range="168">7d</button>
+              </div>
+              <button id="load-history">查询</button>
+              <button id="export-history">导出 CSV</button>
+              <button id="export-chart">导出 PNG</button>
+            </div>
+          </div>
+          <div id="sensor-selector" class="sensor-selector"></div>
+          <canvas id="history-chart" class="chart-canvas" width="1200" height="420"></canvas>
+        </section>
+      </section>
+
+      <section id="page-energy" class="page-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>能耗分析</h2>
+            <div class="segmented" id="energy-ranges">
+              <button data-range="hour">小时</button>
+              <button data-range="day" class="active">今日</button>
+              <button data-range="week">本周</button>
+            </div>
+          </div>
+          <div class="energy-kpis" id="energy-kpis"></div>
+        </section>
+
+        <div class="energy-grid">
+          <section class="panel">
+            <div class="panel-head"><h2>自动模式 vs 常开</h2></div>
+            <canvas id="energy-compare" class="chart-canvas small" width="640" height="300"></canvas>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>风扇功率曲线</h2></div>
+            <canvas id="power-chart" class="chart-canvas small" width="640" height="300"></canvas>
+          </section>
+        </div>
+
+        <div class="energy-grid">
+          <section class="panel">
+            <div class="panel-head"><h2>照明 / 风扇占比</h2></div>
+            <div class="donut-wrap">
+              <div id="energy-donut" class="donut"></div>
+              <div id="energy-donut-label" class="donut-label"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>模式对比</h2></div>
+            <table class="mode-table">
+              <thead><tr><th>模式</th><th>风扇阈值</th><th>开灯阈值</th><th>照明亮度</th><th>适用场景</th></tr></thead>
+              <tbody>
+                <tr><td>节能优先</td><td>&gt; 30°C / CO2 &gt; 1200</td><td>&lt; 100 Lux</td><td>50%</td><td>低人流 / 夜间</td></tr>
+                <tr><td>均衡模式</td><td>&gt; 28°C / CO2 &gt; 1200</td><td>&lt; 150 Lux</td><td>60%</td><td>日常运营</td></tr>
+                <tr><td>舒适优先</td><td>&gt; 26.5°C / CO2 &gt; 1200</td><td>&lt; 200 Lux</td><td>80%</td><td>考试季 / 活动</td></tr>
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="smoke-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>烟雾告警</h2>
+      <p id="smoke-modal-body">检测到烟雾浓度异常，请立即确认现场情况。</p>
+      <div class="modal-actions">
+        <button id="ack-smoke">我已知晓</button>
+        <button data-shortcut="clear_alert" data-alert-type="smoke_warning">解除演示告警</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-root" class="toast-root"></div>
+
+  <script src="js/api.js"></script>
+  <script type="module" src="js/background.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
