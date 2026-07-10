@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import config
 from database_manager import DatabaseManager
@@ -17,11 +17,13 @@ class DeviceController:
         database: DatabaseManager,
         llm_service: LLMService,
         weather_service: WeatherService,
+        simulation_mode_provider: Callable[[], bool] | None = None,
     ) -> None:
         self.obix_client = obix_client
         self.database = database
         self.llm_service = llm_service
         self.weather_service = weather_service
+        self._simulation_mode_provider = simulation_mode_provider or (lambda: config.SIMULATION_MODE)
         self.active_profile = config.DEFAULT_PROFILE
         self.device_status = {
             "buzzer": {"state": False, "trigger": None, "mode": "auto"},
@@ -215,12 +217,16 @@ class DeviceController:
 
     def _apply_comfort_control(self, timestamp: str, snapshot: dict[str, float], fsm_state: str) -> None:
         profile = config.PROFILES[self.active_profile]
-        rule_brightness = self._rule_lighting_brightness(snapshot=snapshot, profile=profile)
-        rule_fan_state = self._guard_fan_state(
-            current_state=self.device_status["fan"]["state"],
-            snapshot=snapshot,
-            profile=profile,
-        )
+        if fsm_state == "VACANT":
+            rule_brightness = 0
+            rule_fan_state = False
+        else:
+            rule_brightness = self._rule_lighting_brightness(snapshot=snapshot, profile=profile)
+            rule_fan_state = self._guard_fan_state(
+                current_state=self.device_status["fan"]["state"],
+                snapshot=snapshot,
+                profile=profile,
+            )
 
         if self.device_status["lighting_led"]["mode"] == "auto":
             self._set_lighting(
@@ -341,7 +347,7 @@ class DeviceController:
     ) -> None:
         point_meta = config.DEVICE_POINTS[device]
         try:
-            if not config.SIMULATION_MODE and point_meta.get("installed", True):
+            if not self._simulation_mode_provider() and point_meta.get("installed", True):
                 self.obix_client.write_point(
                     point_name=point_meta["point_name"],
                     value=value,

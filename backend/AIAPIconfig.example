@@ -10,5 +10,8 @@ LLM_TIMEOUT_SECONDS=8
 WEATHER_API_KEY=your_openweather_api_key_here
 WEATHER_CITY=Wuhan,cn
 
+# Set false only when the physical buzzer is disconnected.
+BUZZER_INSTALLED=true
+
 # Optional alias also supported:
 # DEEPSEEK_API_KEY=your_api_key_here

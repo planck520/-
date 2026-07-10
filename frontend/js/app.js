@@ -1,13 +1,13 @@
 const SENSOR_META = {
-  temperature: { label: "温度", unit: "°C", accent: "#40d383", warn: (v) => v > 30 || v < 16 },
-  humidity: { label: "湿度", unit: "%RH", accent: "#22d3ee", warn: (v) => v > 80 || v < 30 },
-  light: { label: "光照", unit: "Lux", accent: "#f5c84b", warn: (v) => v < 120 },
-  co2: { label: "CO2", unit: "ppm", accent: "#8b7cf6", warn: (v) => v >= 1200 },
-  noise: { label: "噪声", unit: "dB", accent: "#ff9f43", warn: (v) => v >= 65 },
-  smoke: { label: "烟雾", unit: "ppm", accent: "#ff5b6e", warn: (v) => v > 150 },
-  pm25: { label: "PM2.5", unit: "µg/m³", accent: "#9be15d", warn: (v) => v > 75 },
-  fan_current: { label: "风扇电流", unit: "A", accent: "#4f9cff", warn: () => false },
-  fan_power: { label: "风扇功率", unit: "W", accent: "#22d3ee", warn: () => false },
+  temperature: { label: "温度", unit: "°C", accent: "#40d383", icon: "/app/icon/%E5%A4%A7%E6%B0%94%E6%B8%A9%E5%BA%A6.svg", warn: (v) => v > 30 || v < 16 },
+  humidity: { label: "湿度", unit: "%RH", accent: "#22d3ee", icon: "/app/icon/%E6%B9%BF%E5%BA%A6.svg", warn: (v) => v > 80 || v < 30 },
+  light: { label: "光照", unit: "Lux", accent: "#f5c84b", icon: "/app/icon/%E5%85%89%E7%85%A7%E5%BC%BA%E5%BA%A6.svg", warn: (v) => v < 120 },
+  co2: { label: "CO2", unit: "ppm", accent: "#8b7cf6", icon: "/app/icon/CO2%E6%B5%93%E5%BA%A6.svg", warn: (v) => v >= 1200 },
+  noise: { label: "噪声", unit: "dB", accent: "#ff9f43", icon: "/app/icon/%E5%99%AA%E5%A3%B0.svg", warn: (v) => v >= 65 },
+  smoke: { label: "烟雾", unit: "ppm", accent: "#ff5b6e", icon: "/app/icon/%E7%83%9F%E9%9B%BE%E6%8A%A5%E8%AD%A6.svg", warn: (v) => v > 150 },
+  pm25: { label: "PM2.5", unit: "µg/m³", accent: "#9be15d", icon: "/app/icon/pm2.5.svg", warn: (v) => v > 75 },
+  fan_current: { label: "风扇电流", unit: "A", accent: "#4f9cff", icon: "/app/icon/%E7%94%B5%E6%B5%81.svg", warn: () => false },
+  fan_power: { label: "风扇功率", unit: "W", accent: "#22d3ee", icon: "/app/icon/%E5%8A%9F%E7%8E%87.svg", warn: () => false },
 };
 
 const DEVICE_META = {
@@ -30,12 +30,19 @@ const PROFILE_LABELS = {
   comfort: "舒适",
 };
 
+const PROFILE_DESCRIPTIONS = {
+  energy_saving: "提高触发阈值，优先减少照明与风扇运行。",
+  balanced: "在能耗与舒适之间折中，适合日常阅览和稳定人流场景。",
+  comfort: "更早介入照明与风扇，优先维持体感和空气质量。",
+};
+
 const HISTORY_DEFAULT = ["temperature", "humidity", "co2", "noise"];
 
 const state = {
   latest: null,
   system: null,
   devices: {},
+  deviceDiagnostics: null,
   alerts: [],
   weather: null,
   profiles: {},
@@ -46,6 +53,9 @@ const state = {
   historyData: {},
   energyRange: "day",
   chatAbort: null,
+  refreshInFlight: false,
+  slowRefreshInFlight: false,
+  energyInFlight: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -58,7 +68,9 @@ document.addEventListener("DOMContentLoaded", () => {
   tickClock();
   setInterval(tickClock, 1000);
   refreshAll();
+  setTimeout(refreshSlowStatus, 2500);
   setInterval(refreshAll, 2000);
+  setInterval(refreshSlowStatus, 10000);
   setInterval(() => {
     if ((location.hash || "#dashboard") === "#history") loadHistory();
     if ((location.hash || "#dashboard") === "#energy") loadEnergy();
@@ -67,7 +79,7 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshEvents();
   loadAssistant();
   loadHistory();
-  loadEnergy();
+  if ((location.hash || "#dashboard") === "#energy") loadEnergy();
 });
 
 function bindNavigation() {
@@ -135,9 +147,13 @@ function buildStaticControls() {
   $("#sensor-grid").innerHTML = Object.entries(SENSOR_META)
     .map(([key, meta]) => `
       <article class="sensor-card" id="sensor-${key}" style="--card-accent:${meta.accent}">
-        <div class="sensor-label">${meta.label}</div>
-        <div class="sensor-value"><strong>--</strong><span class="sensor-unit">${meta.unit}</span></div>
-        <div class="sensor-time">等待数据</div>
+        <span class="sensor-status-dot online" title="传感器在线"></span>
+        <div class="sensor-copy">
+          <div class="sensor-label">${meta.label}</div>
+          <div class="sensor-value"><strong>--</strong><span class="sensor-unit">${meta.unit}</span></div>
+          <div class="sensor-time">等待数据</div>
+        </div>
+        <img class="sensor-icon" src="${meta.icon}" alt="" aria-hidden="true">
       </article>
     `)
     .join("");
@@ -173,13 +189,14 @@ function buildStaticControls() {
 }
 
 async function refreshAll() {
-  const [latest, system, devices, alerts, energy, weather] = await Promise.allSettled([
+  if (state.refreshInFlight) return;
+  state.refreshInFlight = true;
+  try {
+  const [latest, system, devices, alerts] = await Promise.allSettled([
     IotApi.get("/api/v1/sensors/latest"),
     IotApi.get("/api/v1/system/status"),
     IotApi.get("/api/v1/devices/status"),
     IotApi.get("/api/v1/alerts"),
-    IotApi.get("/api/v1/energy/summary?range=day"),
-    IotApi.get("/api/v1/weather"),
   ]);
 
   const ok = [latest, system, devices, alerts].some((result) => result.status === "fulfilled");
@@ -189,10 +206,30 @@ async function refreshAll() {
   if (system.status === "fulfilled") state.system = system.value;
   if (devices.status === "fulfilled") state.devices = devices.value || {};
   if (alerts.status === "fulfilled") state.alerts = alerts.value.active_alerts || [];
-  if (energy.status === "fulfilled") state.energySummary = energy.value;
-  if (weather.status === "fulfilled") state.weather = weather.value;
 
   renderDashboard();
+  } finally {
+    state.refreshInFlight = false;
+  }
+}
+
+async function refreshSlowStatus() {
+  if (state.slowRefreshInFlight) return;
+  state.slowRefreshInFlight = true;
+  try {
+    const [deviceDiagnostics, weather, energy] = await Promise.allSettled([
+      IotApi.get("/api/v1/devices/diagnostics"),
+      IotApi.get("/api/v1/weather"),
+      IotApi.get("/api/v1/energy/summary?range=day"),
+    ]);
+    if (deviceDiagnostics.status === "fulfilled") state.deviceDiagnostics = deviceDiagnostics.value || null;
+    if (weather.status === "fulfilled") state.weather = weather.value;
+    if (energy.status === "fulfilled" && state.energyRange === "day") state.energySummary = energy.value;
+    renderConnectionChecks();
+    renderSystem();
+  } finally {
+    state.slowRefreshInFlight = false;
+  }
 }
 
 async function refreshProfiles() {
@@ -206,8 +243,8 @@ async function refreshProfiles() {
 
 async function refreshEvents() {
   try {
-    const payload = await IotApi.get("/api/v1/devices/events?limit=8");
-    const events = payload.events || [];
+    const payload = await IotApi.get("/api/v1/devices/events?limit=4");
+    const events = (payload.events || []).slice(0, 4);
     $("#device-events").innerHTML = events.length
       ? events.map((event) => `
         <div class="event-row">
@@ -222,6 +259,7 @@ async function refreshEvents() {
 }
 
 function renderDashboard() {
+  renderConnectionChecks();
   renderSensors();
   renderSystem();
   renderDevices();
@@ -229,18 +267,92 @@ function renderDashboard() {
   renderAssistantContext();
 }
 
+function renderConnectionChecks() {
+  renderSensorConnectionStatus();
+  renderDeviceConnectionStatus();
+}
+
+function renderSensorConnectionStatus() {
+  const target = $("#sensor-connection-status");
+  if (!target) return;
+  const meta = state.latest?.meta || {};
+  const diagnostics = state.latest?.diagnostics || {};
+  const source = meta.source || "unknown";
+  const successfulPolls = Number(diagnostics.successful_polls || 0);
+  const sensorStatus = meta.sensor_status || {};
+  const sensorStates = Object.values(sensorStatus);
+  const totalSensors = sensorStates.length;
+  const onlineSensors = sensorStates.filter((item) => item && item.online === true).length;
+  const hasCurrentError = Boolean(meta.error);
+  const hasNoSuccessfulPoll = successfulPolls <= 0 && diagnostics.thread_alive === false;
+  const isDemo = source === "simulation";
+  const hasPartialOffline = totalSensors > 0 && onlineSensors > 0 && onlineSensors < totalSensors;
+  const isOk = source === "obix" && !hasCurrentError && !hasPartialOffline;
+  const isError = hasCurrentError || hasNoSuccessfulPoll || (totalSensors > 0 && onlineSensors === 0);
+  const label = isError
+    ? `传感器异常：${shortStatusText(meta.error || diagnostics.loop_error || "采集线程未运行")}`
+    : hasPartialOffline
+      ? `传感器：${onlineSensors}/${totalSensors} 在线`
+    : isDemo
+      ? "传感器：Demo 数据"
+      : isOk
+        ? `传感器：oBIX 已连接 · ${formatNumber(successfulPolls)} 次采集`
+        : "传感器连接检测中";
+  target.className = `component-status sensor-status ${isError ? "danger" : hasPartialOffline || isDemo ? "warn" : isOk ? "ok" : ""}`;
+  target.querySelector("span:last-child").textContent = label;
+  target.title = diagnostics.loop_error && isOk ? shortStatusText(diagnostics.loop_error, 160) : "";
+}
+
+function renderDeviceConnectionStatus() {
+  const target = $("#device-connection-status");
+  if (!target) return;
+  const diagnostics = state.deviceDiagnostics;
+  if (!diagnostics) {
+    target.textContent = "设备连接检测中";
+    target.className = "tag";
+    return;
+  }
+  const errors = diagnostics.errors || {};
+  const errorCount = Object.keys(errors).length + (diagnostics.last_write_error ? 1 : 0);
+  const isDemo = diagnostics.mode === "simulation";
+  if (diagnostics.ok) {
+    target.textContent = isDemo ? "设备：Demo 回读" : "设备：oBIX 点位正常";
+    target.className = "tag ok";
+  } else {
+    target.textContent = `设备：${errorCount || 1} 项异常`;
+    target.className = "tag danger";
+    target.title = shortStatusText(diagnostics.last_write_error || Object.values(errors)[0] || "设备点位回读失败", 160);
+  }
+}
+
 function renderSensors() {
   const data = state.latest?.data || {};
   const timestamp = state.latest?.timestamp;
+  const meta = state.latest?.meta || {};
+  const source = meta.source || "unknown";
+  const dataAgeMs = timestamp ? Date.now() - new Date(timestamp).getTime() : Number.POSITIVE_INFINITY;
+  const isFresh = Number.isFinite(dataAgeMs) && dataAgeMs <= 15000;
+  const sourceOnline = source === "obix" && !meta.error;
   Object.entries(SENSOR_META).forEach(([key, meta]) => {
     const card = $(`#sensor-${key}`);
     if (!card) return;
     const raw = data[key]?.value;
     const value = numberOrNull(raw);
     const unit = data[key]?.unit || meta.unit;
+    const pointStatus = data[key]?.status || null;
+    const hasPointStatus = pointStatus && typeof pointStatus.online === "boolean";
+    const online = hasPointStatus ? Boolean(pointStatus.online) : sourceOnline && isFresh && value !== null;
     card.querySelector("strong").textContent = value === null ? "--" : formatNumber(value);
     card.querySelector(".sensor-unit").textContent = normalizeUnit(unit);
     card.querySelector(".sensor-time").textContent = timestamp ? `更新 ${formatTime(timestamp)}` : "等待数据";
+    const dot = card.querySelector(".sensor-status-dot");
+    if (dot) {
+      dot.classList.toggle("online", online);
+      dot.classList.toggle("offline", !online);
+      dot.title = online
+        ? "传感器在线"
+        : shortStatusText(pointStatus?.error || "传感器掉线或数据未刷新", 120);
+    }
     card.style.borderColor = value !== null && meta.warn(value) ? "rgba(255,91,110,.48)" : "";
   });
 }
@@ -254,6 +366,7 @@ function renderSystem() {
   $("#fsm-score").textContent = `score ${formatNumber(system.fsm_score ?? 0)}`;
   $("#profile-active").textContent = profileLabel(system.active_profile);
   $("#active-profile-side").textContent = profileLabel(system.active_profile);
+  renderFsmDetail(system);
 
   $$(".fsm-step").forEach((step) => step.classList.toggle("active", step.dataset.fsm === system.fsm_state));
 
@@ -264,12 +377,46 @@ function renderSystem() {
   }
 }
 
+function renderFsmDetail(system) {
+  const stateName = system.fsm_state || "--";
+  const profileName = system.active_profile || state.profiles.active_profile || "balanced";
+  const profiles = state.profiles.profiles || {};
+  const config = profiles[profileName] || {};
+  const stateDescriptions = {
+    VACANT: "空间无人，自动关闭照明与风扇。",
+    ARRIVING: "检测到进入趋势，准备恢复舒适策略。",
+    OCCUPIED: "空间有人，按环境数据执行自动策略。",
+    LEAVING: "检测到离开趋势，等待确认后节能。",
+  };
+
+  $("#fsm-current-state").textContent = stateName === "--" ? "--" : `${stateName} / ${FSM_LABELS[stateName] || "--"}`;
+  $("#fsm-current-desc").textContent = stateDescriptions[stateName] || "等待 FSM 状态更新。";
+  $("#fsm-policy-mode").textContent = `${profileLabel(profileName)} · ${aiModeLabel(system.ai_mode)}`;
+  $("#fsm-policy-detail").textContent =
+    `风扇 >= ${config.fan_on_above_c ?? "--"}°C 或 CO2 >= 1200 ppm；开灯 < ${config.light_on_below_lux ?? "--"} Lux`;
+}
+
 function renderProfiles() {
   const active = state.profiles.active_profile || state.system?.active_profile || "balanced";
   const profiles = state.profiles.profiles || {};
-  $("#profile-switcher").innerHTML = Object.keys(profiles).map((key) => `
-    <button data-profile="${key}" class="${key === active ? "active" : ""}">${profileLabel(key)}</button>
-  `).join("");
+  const profileOrder = ["energy_saving", "balanced", "comfort"];
+  const profileKeys = profileOrder
+    .filter((key) => profiles[key])
+    .concat(Object.keys(profiles).filter((key) => !profileOrder.includes(key)));
+  $("#profile-switcher").innerHTML = profileKeys.map((key) => {
+    const config = profiles[key] || {};
+    return `
+      <button data-profile="${key}" class="profile-card ${key === active ? "active" : ""}">
+        <span class="profile-card-title">${profileLabel(key)}</span>
+        <span class="profile-card-desc">${PROFILE_DESCRIPTIONS[key] || "按当前配置执行自动控制策略。"}</span>
+        <span class="profile-card-metrics">
+          <span><b>${config.fan_on_above_c ?? "--"}°C</b><small>风扇</small></span>
+          <span><b>${config.light_on_below_lux ?? "--"} Lux</b><small>开灯</small></span>
+          <span><b>${config.lighting_brightness ?? "--"}%</b><small>亮度</small></span>
+        </span>
+      </button>
+    `;
+  }).join("");
   $("#profile-switcher").onclick = async (event) => {
     const button = event.target.closest("button[data-profile]");
     if (!button) return;
@@ -284,7 +431,7 @@ function renderProfiles() {
   };
 
   const config = profiles[active] || {};
-  $("#profile-detail").textContent = `风扇温度 >= ${config.fan_on_above_c ?? "--"}°C 或 CO2 >= 1200 ppm，开灯照度 < ${config.light_on_below_lux ?? "--"} Lux，建议亮度 ${config.lighting_brightness ?? "--"}%`;
+  $("#profile-detail").textContent = `当前${profileLabel(active)}：温度 >= ${config.fan_on_above_c ?? "--"}°C 或 CO2 >= 1200 ppm 时建议开启风扇，照度 < ${config.light_on_below_lux ?? "--"} Lux 时建议开灯。`;
 }
 
 function renderDevices() {
@@ -314,12 +461,14 @@ function renderDevices() {
       `;
     return `
       <article class="device-card">
-        <div class="device-title">
-          <strong>${meta.label}</strong>
-          <span class="state-dot ${isOn ? "on" : ""}"></span>
+        <div class="device-info">
+          <div class="device-title">
+            <strong>${meta.label}</strong>
+            <span class="state-dot ${isOn ? "on" : ""}"></span>
+          </div>
+          <div class="device-meta">${isOn ? "已开启" : "已关闭"} · ${mode === "manual" ? "手动" : "自动"}${item.trigger ? ` · ${item.trigger}` : ""}</div>
         </div>
-        <div class="device-meta">${isOn ? "已开启" : "已关闭"} · ${mode === "manual" ? "手动" : "自动"}${item.trigger ? ` · ${item.trigger}` : ""}</div>
-        ${controls}
+        <div class="device-control-row">${controls}</div>
       </article>
     `;
   }).join("");
@@ -346,8 +495,10 @@ function renderAlerts() {
   $("#alerts-list").className = "";
   $("#alerts-list").innerHTML = alerts.map((alert) => `
     <div class="alert-row">
-      <strong>${alertLabel(alert.type)}</strong>
-      <div class="muted">${alert.message || "传感器超过阈值"} · 当前 ${formatNumber(alert.value)} / 阈值 ${formatNumber(alert.threshold)}</div>
+      <div class="alert-copy">
+        <strong>${alertLabel(alert.type)}</strong>
+        <span class="muted">${alert.message || "传感器超过阈值"} · 当前 ${formatNumber(alert.value)} / 阈值 ${formatNumber(alert.threshold)}</span>
+      </div>
       <div class="device-actions">
         <button data-shortcut="clear_alert" data-alert-type="${alert.type}">解除此告警</button>
       </div>
@@ -387,8 +538,22 @@ async function runShortcutFromElement(element) {
 
 async function shortcut(action, params, successMessage) {
   try {
-    await IotApi.post("/api/v1/shortcuts/action", { action, params });
+    const result = await IotApi.post("/api/v1/shortcuts/action", { action, params });
+    if (action === "toggle_demo_mode" || action === "set_demo_mode") {
+      state.system = {
+        ...(state.system || {}),
+        demo_mode: result.demo_mode,
+        demo_mode_override: result.demo_mode_override,
+        degraded: result.demo_mode ? true : state.system?.degraded,
+      };
+      renderSystem();
+      renderConnectionChecks();
+    }
     toast(successMessage || "快捷动作已执行", "ok");
+    if (action === "toggle_demo_mode" || action === "set_demo_mode") {
+      Promise.allSettled([refreshAll(), refreshEvents()]);
+      return;
+    }
     await refreshAll();
     await refreshEvents();
   } catch (error) {
@@ -505,6 +670,8 @@ async function loadHistory() {
 }
 
 async function loadEnergy() {
+  if (state.energyInFlight) return;
+  state.energyInFlight = true;
   try {
     const [summary, series] = await Promise.all([
       IotApi.get(`/api/v1/energy/summary?range=${state.energyRange}`),
@@ -515,6 +682,8 @@ async function loadEnergy() {
     renderEnergy();
   } catch (error) {
     toast(`能耗数据加载失败：${error.message}`, "error");
+  } finally {
+    state.energyInFlight = false;
   }
 }
 
@@ -750,6 +919,12 @@ function formatNumber(value) {
   if (Math.abs(parsed) >= 100) return parsed.toFixed(0);
   if (Math.abs(parsed) >= 10) return parsed.toFixed(1);
   return parsed.toFixed(2);
+}
+
+function shortStatusText(value, maxLength = 42) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "未知异常";
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
 function formatDuration(seconds) {

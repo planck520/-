@@ -15,24 +15,38 @@ class SensorDataCollector:
         self.random = random.Random(config.SIMULATION_SEED)
         self.last_source = "simulation" if config.SIMULATION_MODE else "obix"
         self.last_error = ""
+        self.last_sensor_status = self._build_status(source=self.last_source, online=config.SIMULATION_MODE)
 
-    def collect(self) -> tuple[str, dict[str, float], dict[str, str]]:
+    def collect(self, previous_readings: dict[str, float] | None = None) -> tuple[str, dict[str, float], dict[str, object]]:
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         if not config.SIMULATION_MODE:
-            try:
-                readings = self._collect_from_obix()
+            readings, status = self._collect_from_obix_partial(previous_readings=previous_readings)
+            online_count = sum(1 for item in status.values() if item["online"])
+            errors = {name: item["error"] for name, item in status.items() if item["error"]}
+
+            if online_count:
                 self.last_source = "obix"
-                self.last_error = ""
-                return timestamp, readings, {"source": "obix"}
-            except Exception as exc:
-                self.last_source = "simulation"
-                self.last_error = str(exc)
-                if config.STRICT_OBIX_MODE:
-                    raise RuntimeError(f"Failed to collect data from oBIX: {exc}") from exc
-                readings = self._collect_simulated()
-                return timestamp, readings, {"source": "simulation", "error": str(exc)}
+                self.last_error = "; ".join(f"{name}: {err}" for name, err in errors.items())
+                self.last_sensor_status = status
+                meta: dict[str, object] = {"source": "obix", "sensor_status": status}
+                if errors:
+                    meta["partial_error"] = self.last_error
+                return timestamp, readings, meta
+
+            self.last_source = "error"
+            self.last_error = "; ".join(f"{name}: {err}" for name, err in errors.items()) or "all oBIX sensor reads failed"
+            self.last_sensor_status = status
+            if config.STRICT_OBIX_MODE:
+                raise RuntimeError(f"Failed to collect data from oBIX: {self.last_error}")
+            readings = previous_readings.copy() if previous_readings else self._collect_simulated()
+            return timestamp, readings, {
+                "source": "error",
+                "error": self.last_error,
+                "sensor_status": status,
+            }
         readings = self._collect_simulated()
-        return timestamp, readings, {"source": "simulation"}
+        self.last_sensor_status = self._build_status(source="simulation", online=True)
+        return timestamp, readings, {"source": "simulation", "sensor_status": self.last_sensor_status}
 
     def _collect_from_obix(self) -> dict[str, float]:
         readings: dict[str, float] = {}
@@ -41,6 +55,59 @@ class SensorDataCollector:
             readings[sensor_name] = float(self.obix_client.read_point(point_name))
         readings["fan_power"] = round(readings["fan_current"] * config.FAN_VOLTAGE, 2)
         return readings
+
+    def _collect_from_obix_partial(
+        self,
+        previous_readings: dict[str, float] | None = None,
+    ) -> tuple[dict[str, float], dict[str, dict[str, object]]]:
+        readings: dict[str, float] = previous_readings.copy() if previous_readings else self._collect_simulated()
+        status: dict[str, dict[str, object]] = {}
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+
+        for sensor_name in config.RAW_SENSOR_KEYS:
+            point_name = config.SENSORS[sensor_name]["point_name"]
+            try:
+                readings[sensor_name] = float(self.obix_client.read_point(point_name))
+                status[sensor_name] = {
+                    "online": True,
+                    "source": "obix",
+                    "point_name": point_name,
+                    "updated_at": now,
+                    "error": "",
+                }
+            except Exception as exc:
+                status[sensor_name] = {
+                    "online": False,
+                    "source": "obix",
+                    "point_name": point_name,
+                    "updated_at": now,
+                    "error": str(exc),
+                }
+
+        fan_current_ok = bool(status.get("fan_current", {}).get("online"))
+        if fan_current_ok:
+            readings["fan_power"] = round(readings["fan_current"] * config.FAN_VOLTAGE, 2)
+        status["fan_power"] = {
+            "online": fan_current_ok,
+            "source": "derived",
+            "point_name": config.SENSORS["fan_power"]["point_name"],
+            "updated_at": now,
+            "error": "" if fan_current_ok else "fan_current offline",
+        }
+        return readings, status
+
+    def _build_status(self, source: str, online: bool) -> dict[str, dict[str, object]]:
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        return {
+            sensor_name: {
+                "online": online,
+                "source": source,
+                "point_name": meta["point_name"],
+                "updated_at": now,
+                "error": "",
+            }
+            for sensor_name, meta in config.SENSORS.items()
+        }
 
     def _collect_simulated(self) -> dict[str, float]:
         tick = time.time() / 60.0

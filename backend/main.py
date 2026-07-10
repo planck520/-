@@ -23,11 +23,13 @@ class BackendRuntime:
         self.llm_service = LLMService()
         self.sensor_collector = SensorDataCollector(self.obix_client)
         self.occupancy_detector = OccupancyDetector()
+        self._demo_mode_override: bool | None = None
         self.device_controller = DeviceController(
             obix_client=self.obix_client,
             database=self.database,
             llm_service=self.llm_service,
             weather_service=self.weather_service,
+            simulation_mode_provider=self._effective_simulation_mode,
         )
         self.started_at = time.time()
         self._lock = threading.Lock()
@@ -36,9 +38,11 @@ class BackendRuntime:
         self._fsm_state = "VACANT"
         self._fsm_score = 0.0
         self._fsm_override_state: str | None = None
-        self._demo_mode_override: bool | None = None
         self._shortcut_history: list[dict[str, Any]] = []
-        self._collector_meta = {"source": "simulation"}
+        self._collector_meta = {
+            "source": "simulation",
+            "sensor_status": self.sensor_collector.last_sensor_status,
+        }
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._loop_error: str | None = None
@@ -54,8 +58,8 @@ class BackendRuntime:
         self._stop_event.set()
 
     def _run_loop(self) -> None:
-        try:
-            while not self._stop_event.is_set():
+        while not self._stop_event.is_set():
+            try:
                 timestamp, snapshot, meta = self._collect_for_active_mode()
                 previous_state, current_state, score = self.occupancy_detector.evaluate(snapshot)
                 with self._lock:
@@ -83,39 +87,66 @@ class BackendRuntime:
                     self._loop_error = None
                 if previous_state != current_state:
                     pass
-                self._stop_event.wait(config.POLL_INTERVAL_SECONDS)
-        except Exception as exc:
-            with self._lock:
-                self._loop_error = str(exc)
+            except Exception as exc:
+                with self._lock:
+                    self._collector_meta = {
+                        "source": "error",
+                        "error": str(exc),
+                        "sensor_status": self.sensor_collector.last_sensor_status,
+                    }
+                    self._loop_error = str(exc)
+            self._stop_event.wait(config.POLL_INTERVAL_SECONDS)
 
-    def _collect_for_active_mode(self) -> tuple[str, dict[str, float], dict[str, str]]:
+    def _collect_for_active_mode(self) -> tuple[str, dict[str, float], dict[str, object]]:
         with self._lock:
             demo_override = self._demo_mode_override
+            previous_readings = self._latest_snapshot.copy()
 
         if demo_override is True:
             timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
-            return timestamp, self.sensor_collector._collect_simulated(), {
+            readings = self.sensor_collector._collect_simulated()
+            status = self.sensor_collector._build_status(source="simulation", online=True)
+            self.sensor_collector.last_sensor_status = status
+            return timestamp, readings, {
                 "source": "simulation",
                 "demo_override": "true",
+                "sensor_status": status,
             }
 
         if demo_override is False and config.SIMULATION_MODE:
             timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
-            readings = self.sensor_collector._collect_from_obix()
-            return timestamp, readings, {"source": "obix", "demo_override": "false"}
+            readings, status = self.sensor_collector._collect_from_obix_partial(previous_readings=previous_readings)
+            errors = {name: item["error"] for name, item in status.items() if item["error"]}
+            meta: dict[str, object] = {
+                "source": "obix",
+                "demo_override": "false",
+                "sensor_status": status,
+            }
+            if errors:
+                meta["partial_error"] = "; ".join(f"{name}: {err}" for name, err in errors.items())
+            return timestamp, readings, meta
 
-        return self.sensor_collector.collect()
+        return self.sensor_collector.collect(previous_readings=previous_readings)
 
     def get_latest_sensor_payload(self) -> dict[str, Any]:
         with self._lock:
             timestamp = self._latest_timestamp
             snapshot = self._latest_snapshot.copy()
+            collector_meta = dict(self._collector_meta)
+            diagnostics = {
+                "loop_error": self._loop_error,
+                "successful_polls": self._successful_polls,
+                "thread_alive": bool(self._thread and self._thread.is_alive()),
+            }
         return {
             "timestamp": timestamp,
+            "meta": collector_meta,
+            "diagnostics": diagnostics,
             "data": {
                 sensor_name: {
                     "value": snapshot[sensor_name],
                     "unit": config.SENSORS[sensor_name]["unit"],
+                    "status": collector_meta.get("sensor_status", {}).get(sensor_name, {}),
                 }
                 for sensor_name in config.SENSORS
             },
@@ -240,11 +271,16 @@ class BackendRuntime:
             enabled = bool(payload.get("enabled"))
             with self._lock:
                 self._demo_mode_override = enabled
+            if enabled:
+                self._publish_simulated_snapshot(timestamp=timestamp)
             result = {"demo_mode": self._effective_simulation_mode(), "demo_mode_override": enabled}
         elif action == "toggle_demo_mode":
             with self._lock:
                 current = self._effective_simulation_mode()
                 self._demo_mode_override = not current
+                enabled = self._demo_mode_override
+            if enabled:
+                self._publish_simulated_snapshot(timestamp=timestamp)
             result = {"demo_mode": self._effective_simulation_mode(), "demo_mode_override": self._demo_mode_override}
         else:
             raise ValueError("Unsupported shortcut action")
@@ -310,10 +346,53 @@ class BackendRuntime:
         with self._lock:
             return dict(self._collector_meta)
 
+    def get_sensor_diagnostics(self) -> dict[str, Any]:
+        with self._lock:
+            meta = dict(self._collector_meta)
+            diagnostics = {
+                "loop_error": self._loop_error,
+                "successful_polls": self._successful_polls,
+                "thread_alive": bool(self._thread and self._thread.is_alive()),
+            }
+        status = meta.get("sensor_status") or self.sensor_collector.last_sensor_status
+        return {
+            "source": meta.get("source", "unknown"),
+            "error": meta.get("error"),
+            "partial_error": meta.get("partial_error"),
+            "sensor_status": status,
+            "diagnostics": diagnostics,
+        }
+
     def read_physical_device_states(self) -> dict[str, Any]:
-        if config.SIMULATION_MODE:
+        if self._effective_simulation_mode():
             return {"mode": "simulation", "states": self.get_device_status()}
         return {"mode": "obix", "states": self.obix_client.read_device_points()}
+
+    def get_device_diagnostics(self) -> dict[str, Any]:
+        control_state = self.device_controller.get_system_control_state()
+        try:
+            readback = self.read_physical_device_states()
+            states = readback.get("states", {})
+            errors = {
+                device: value.get("error")
+                for device, value in states.items()
+                if isinstance(value, dict) and value.get("error")
+            }
+            return {
+                "mode": readback.get("mode", "unknown"),
+                "ok": not errors and not control_state["last_write_error"],
+                "states": states,
+                "errors": errors,
+                "last_write_error": control_state["last_write_error"],
+            }
+        except Exception as exc:
+            return {
+                "mode": "error",
+                "ok": False,
+                "states": {},
+                "errors": {"readback": str(exc)},
+                "last_write_error": control_state["last_write_error"],
+            }
 
     def get_runtime_diagnostics(self) -> dict[str, Any]:
         with self._lock:
@@ -332,6 +411,39 @@ class BackendRuntime:
 
     def _effective_simulation_mode(self) -> bool:
         return config.SIMULATION_MODE if self._demo_mode_override is None else self._demo_mode_override
+
+    def _publish_simulated_snapshot(self, timestamp: str | None = None) -> None:
+        timestamp = timestamp or datetime.now().astimezone().isoformat(timespec="seconds")
+        snapshot = self.sensor_collector._collect_simulated()
+        status = self.sensor_collector._build_status(source="simulation", online=True)
+        self.sensor_collector.last_sensor_status = status
+        previous_state, current_state, score = self.occupancy_detector.evaluate(snapshot)
+        with self._lock:
+            override_state = self._fsm_override_state
+        if override_state is not None:
+            current_state = override_state
+            self.occupancy_detector.fsm.state = override_state
+            score = self._fsm_score
+        self.database.insert_sensor_snapshot(timestamp=timestamp, readings=snapshot)
+        self.device_controller.update(
+            timestamp=timestamp,
+            snapshot=snapshot,
+            fsm_state=current_state,
+            fsm_score=score,
+            data_source="simulation",
+        )
+        with self._lock:
+            self._latest_timestamp = timestamp
+            self._latest_snapshot = snapshot
+            self._fsm_state = current_state
+            self._fsm_score = score
+            self._collector_meta = {
+                "source": "simulation",
+                "demo_override": "true",
+                "sensor_status": status,
+            }
+            self._successful_polls += 1
+            self._loop_error = None
 
     def _record_shortcut(
         self,
@@ -412,7 +524,7 @@ def main() -> None:
     runtime = BackendRuntime()
     runtime.start()
     app = create_app(runtime)
-    app.run(host=config.HOST, port=config.PORT, debug=False)
+    app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

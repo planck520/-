@@ -14,6 +14,7 @@ def create_app(runtime) -> Flask:
     app = Flask(__name__)
     app.json.ensure_ascii = False
     frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+    icon_dir = Path(__file__).resolve().parent.parent / "icon"
 
     @app.get("/")
     def index():
@@ -33,6 +34,10 @@ def create_app(runtime) -> Flask:
     def latest_sensors():
         payload = runtime.get_latest_sensor_payload()
         return jsonify(payload)
+
+    @app.get("/api/v1/sensors/diagnostics")
+    def sensor_diagnostics():
+        return jsonify(runtime.get_sensor_diagnostics())
 
     @app.get("/api/v1/sensors/history")
     def sensor_history():
@@ -54,6 +59,10 @@ def create_app(runtime) -> Flask:
     @app.get("/api/v1/devices/status")
     def device_status():
         return jsonify(runtime.get_device_status())
+
+    @app.get("/api/v1/devices/diagnostics")
+    def device_diagnostics():
+        return jsonify(runtime.get_device_diagnostics())
 
     @app.get("/api/v1/devices/events")
     def device_events():
@@ -160,6 +169,10 @@ def create_app(runtime) -> Flask:
     @app.get("/app/")
     def frontend_index():
         return send_from_directory(frontend_dir, "index.html")
+
+    @app.get("/app/icon/<path:filename>")
+    def frontend_icons(filename: str):
+        return send_from_directory(icon_dir, filename)
 
     @app.get("/app/<path:filename>")
     def frontend_assets(filename: str):

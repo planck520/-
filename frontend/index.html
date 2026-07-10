@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>慧阅 AI 低碳智控系统</title>
+  <link rel="icon" type="image/png" href="logo.png">
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -11,7 +12,7 @@
 
   <div class="titlebar">
     <div class="titlebar-brand">
-      <span class="brand-mark">HY</span>
+      <img class="brand-logo" src="logo.png" alt="慧阅智控 Logo">
       <span class="brand-title">慧阅 AI 低碳智控系统</span>
       <span class="brand-subtitle">JACE8000 / oBIX / LLM Advice</span>
     </div>
@@ -24,7 +25,7 @@
   <div id="app-shell">
     <aside id="sidebar">
       <div class="sidebar-logo">
-        <div class="logo-icon">阅</div>
+        <img class="logo-icon" src="logo.png" alt="慧阅智控 Logo">
         <div>
           <div class="logo-text">慧阅智控</div>
           <div class="logo-sub">Library IoT Console</div>
@@ -90,9 +91,13 @@
           </section>
         </div>
 
+        <div class="component-status sensor-status" id="sensor-connection-status">
+          <span class="status-dot"></span>
+          <span>传感器连接检测中</span>
+        </div>
         <section class="sensor-grid" id="sensor-grid"></section>
 
-        <div class="dashboard-grid">
+        <div class="dashboard-grid control-grid">
           <section class="panel">
             <div class="panel-head">
               <h2>空间状态 FSM</h2>
@@ -106,32 +111,54 @@
               <button data-shortcut="set_fsm" data-state="LEAVING">4 离开</button>
               <button data-shortcut="clear_fsm">0 清除覆盖</button>
             </div>
+            <div class="fsm-detail-grid">
+              <div class="fsm-detail-card">
+                <span class="metric-label">当前状态</span>
+                <strong id="fsm-current-state">--</strong>
+                <div id="fsm-current-desc" class="muted">等待后端状态...</div>
+              </div>
+              <div class="fsm-detail-card">
+                <span class="metric-label">自动策略</span>
+                <strong id="fsm-policy-mode">--</strong>
+                <div id="fsm-policy-detail" class="muted">等待模式配置...</div>
+              </div>
+              <div class="fsm-detail-card fsm-shortcuts-card">
+                <span class="metric-label">键盘控制</span>
+                <div class="shortcut-hints">
+                  <span>1 无人</span>
+                  <span>2 进入</span>
+                  <span>3 占用</span>
+                  <span>4 离开</span>
+                  <span>0 自动</span>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="panel">
             <div class="panel-head">
               <h2>设备控制</h2>
-              <span class="tag">手动覆盖 / 自动恢复</span>
+              <span class="tag" id="device-connection-status">设备连接检测中</span>
             </div>
             <div class="device-grid" id="device-grid"></div>
           </section>
         </div>
 
-        <div class="dashboard-grid">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>告警与预案</h2>
-              <button id="clear-alerts" class="text-button">清除告警</button>
-            </div>
-            <div id="alerts-list" class="list-empty">暂无活动告警</div>
-          </section>
-
+        <div class="dashboard-grid event-grid">
           <section class="panel">
             <div class="panel-head">
               <h2>最近设备事件</h2>
               <button id="refresh-events" class="text-button">刷新</button>
             </div>
             <div id="device-events" class="event-list">等待数据...</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>告警与预案</h2>
+              <button id="clear-alerts" class="text-button">清除告警</button>
+            </div>
+            <div id="alerts-list" class="list-empty">暂无活动告警</div>
           </section>
         </div>
       </section>

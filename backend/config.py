@@ -70,7 +70,7 @@ LLM_BASE_URL = _env("LLM_BASE_URL")
 LLM_API_KEY = _env("LLM_API_KEY", "DEEPSEEK_API_KEY")
 LLM_TIMEOUT_SECONDS = float(_env("LLM_TIMEOUT_SECONDS", default="8"))
 
-BUZZER_INSTALLED = _env_bool("BUZZER_INSTALLED", default=False)
+BUZZER_INSTALLED = _env_bool("BUZZER_INSTALLED", default=True)
 DEFAULT_PROFILE = _env("DEFAULT_PROFILE", default="balanced")
 FAN_VOLTAGE = float(_env("FAN_VOLTAGE", default="24.0"))
 FAN_ALWAYS_ON_POWER_W = float(_env("FAN_ALWAYS_ON_POWER_W", default="24.0"))
@@ -90,27 +90,25 @@ CO2_COMFORT_MAX = float(_env("CO2_COMFORT_MAX", default="1200"))
 CO2_FAN_OFF_BELOW = float(_env("CO2_FAN_OFF_BELOW", default="900"))
 FAN_TEMP_HYSTERESIS = float(_env("FAN_TEMP_HYSTERESIS", default="1.0"))
 
-FSM_ENTER_OCCUPIED = float(_env("FSM_ENTER_OCCUPIED", default="0.70"))
+FSM_ENTER_OCCUPIED = float(_env("FSM_ENTER_OCCUPIED", default="0.45"))
 FSM_EXIT_OCCUPIED = float(_env("FSM_EXIT_OCCUPIED", default="0.30"))
 FSM_ENTER_ARRIVING = float(_env("FSM_ENTER_ARRIVING", default="0.40"))
-FSM_ENTER_LEAVING = float(_env("FSM_ENTER_LEAVING", default="0.50"))
+FSM_ENTER_LEAVING = float(_env("FSM_ENTER_LEAVING", default="0.40"))
 
 OCCUPANCY_SCORE_RANGES = {
     "co2": (450.0, 1200.0),
     "noise": (30.0, 70.0),
     "temp_delta": (0.0, 1.5),
     "humidity_delta": (0.0, 8.0),
-    "pm25": (0.0, 120.0),
     "light_delta": (0.0, 350.0),
 }
 
 FSM_WEIGHTS = {
-    "co2": 0.35,
-    "noise": 0.20,
-    "temp_delta": 0.15,
+    "co2": 0.40,
+    "noise": 0.25,
+    "temp_delta": 0.10,
     "humidity_delta": 0.10,
-    "pm25": 0.10,
-    "light_delta": 0.10,
+    "light_delta": 0.15,
 }
 
 SENSORS = {
@@ -128,7 +126,7 @@ SENSORS = {
 RAW_SENSOR_KEYS = [name for name, meta in SENSORS.items() if meta["raw"]]
 
 DEVICE_POINTS = {
-    "buzzer": {"point_name": "警示LED开关", "kind": "bool"},
+    "buzzer": {"point_name": "蜂鸣器", "kind": "bool"},
     "warning_led": {"point_name": "警示LED开关", "kind": "bool"},
     "lighting_led": {"point_name": "照明LED", "kind": "real"},
     "fan": {"point_name": "风扇开关", "kind": "bool"},

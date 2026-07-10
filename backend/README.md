@@ -76,7 +76,7 @@ Demo/simulation mode:
 $env:SIMULATION_MODE="true"
 ```
 
-The buzzer is currently not installed. By default the backend keeps buzzer logic state for demos but does not write a physical buzzer point:
+The buzzer is installed by default and writes to the Workbench/oBIX BooleanWritable point `蜂鸣器`. If the buzzer is temporarily disconnected, disable physical writes while keeping demo logic state:
 
 ```powershell
 $env:BUZZER_INSTALLED="false"

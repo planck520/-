@@ -34,7 +34,6 @@ class OccupancyDetector:
             "noise": self._normalize(snapshot["noise"], "noise"),
             "temp_delta": self._normalize(temp_delta, "temp_delta"),
             "humidity_delta": self._normalize(humidity_delta, "humidity_delta"),
-            "pm25": self._normalize(snapshot["pm25"], "pm25"),
             "light_delta": self._normalize(light_delta, "light_delta"),
         }
         score = 0.0
