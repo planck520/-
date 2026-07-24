@@ -40,6 +40,7 @@ class DeviceController:
         self._smoke_below_since: datetime | None = None
         self._last_decision_signature: tuple[int, bool, str] | None = None
         self._last_comfort_source = "fsm_fallback"
+        self._last_lighting_write: int | None = None
 
     def update(
         self,
@@ -295,25 +296,29 @@ class DeviceController:
     def _set_lighting(self, timestamp: str, brightness: int, source: str) -> None:
         desired_state = brightness > 0
         current = self.device_status["lighting_led"]
-        if current["brightness"] == brightness and current["state"] == desired_state:
+        if (
+            self._last_lighting_write == brightness
+            and current["brightness"] == brightness
+            and current["state"] == desired_state
+        ):
             return
         current["brightness"] = brightness
         current["state"] = desired_state
         analog_value = round(brightness / 100.0 * config.LIGHTING_ANALOG_MAX, 2)
         point_meta = config.DEVICE_POINTS["lighting_led"]
-        write_value = desired_state if point_meta["kind"] == "bool" else analog_value
-        self._write_obix_value(
+        if self._write_obix_value(
             device="lighting_led",
-            value=write_value,
+            value=analog_value,
             source=source,
             event_action="set_brightness",
             event_value={
                 "brightness": brightness,
                 "analog_value": analog_value,
-                "physical_value": write_value,
+                "physical_value": analog_value,
                 "point_kind": point_meta["kind"],
             },
-        )
+        ):
+            self._last_lighting_write = brightness
 
     def _set_bool_device(
         self,
@@ -344,7 +349,7 @@ class DeviceController:
         source: str,
         event_action: str,
         event_value: Any,
-    ) -> None:
+    ) -> bool:
         point_meta = config.DEVICE_POINTS[device]
         try:
             if not self._simulation_mode_provider() and point_meta.get("installed", True):
@@ -354,9 +359,11 @@ class DeviceController:
                     kind=point_meta["kind"],
                 )
             self.last_write_error = ""
+            return True
         except Exception as exc:
             self.last_write_error = str(exc)
             self.degraded = True
+            return False
         finally:
             self.database.log_device_event(
                 timestamp=datetime.now().astimezone().isoformat(timespec="seconds"),

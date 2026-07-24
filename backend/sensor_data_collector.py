@@ -53,7 +53,8 @@ class SensorDataCollector:
         for sensor_name in config.RAW_SENSOR_KEYS:
             point_name = config.SENSORS[sensor_name]["point_name"]
             readings[sensor_name] = float(self.obix_client.read_point(point_name))
-        readings["fan_power"] = round(readings["fan_current"] * config.FAN_VOLTAGE, 2)
+        if not config.SENSORS["fan_power"]["point_name"]:
+            readings["fan_power"] = round(readings["fan_current"] * config.LIGHTING_VOLTAGE, 2)
         return readings
 
     def _collect_from_obix_partial(
@@ -84,16 +85,46 @@ class SensorDataCollector:
                     "error": str(exc),
                 }
 
-        fan_current_ok = bool(status.get("fan_current", {}).get("online"))
-        if fan_current_ok:
-            readings["fan_power"] = round(readings["fan_current"] * config.FAN_VOLTAGE, 2)
-        status["fan_power"] = {
-            "online": fan_current_ok,
-            "source": "derived",
-            "point_name": config.SENSORS["fan_power"]["point_name"],
-            "updated_at": now,
-            "error": "" if fan_current_ok else "fan_current offline",
-        }
+        current_ok = bool(status.get("fan_current", {}).get("online"))
+        power_point_name = str(config.SENSORS["fan_power"]["point_name"])
+        if current_ok and not power_point_name:
+            readings["fan_power"] = round(readings["fan_current"] * config.LIGHTING_VOLTAGE, 2)
+            status["fan_power"] = {
+                "online": True,
+                "source": "derived",
+                "point_name": config.SENSORS["fan_current"]["point_name"],
+                "updated_at": now,
+                "error": "",
+            }
+        elif not power_point_name:
+            status["fan_power"] = {
+                "online": False,
+                "source": "derived",
+                "point_name": config.SENSORS["fan_current"]["point_name"],
+                "updated_at": now,
+                "error": "lighting current point is offline",
+            }
+        else:
+            try:
+                readings["fan_power"] = float(self.obix_client.read_point(power_point_name))
+                status["fan_power"] = {
+                    "online": True,
+                    "source": "obix",
+                    "point_name": power_point_name,
+                    "updated_at": now,
+                    "error": "",
+                }
+            except Exception as exc:
+                status["fan_power"] = {
+                    "online": False,
+                    "source": "obix",
+                    "point_name": power_point_name,
+                    "updated_at": now,
+                    "error": str(exc),
+                }
+                if current_ok:
+                    readings["fan_power"] = round(readings["fan_current"] * config.LIGHTING_VOLTAGE, 2)
+                    status["fan_power"].update({"online": True, "source": "derived", "error": ""})
         return readings, status
 
     def _build_status(self, source: str, online: bool) -> dict[str, dict[str, object]]:
@@ -120,12 +151,9 @@ class SensorDataCollector:
         noise = 38.0 + (14.0 if occupied else 3.0) + abs(math.sin(tick * 3.0)) * 6.0
         smoke = 8.0 + abs(math.sin(tick / 2.5)) * 4.0
         pm25 = 20.0 + (18.0 if occupied else 4.0) + abs(math.sin(tick / 1.7)) * 8.0
-        fan_should_run = (
-            temperature >= config.PROFILES[config.DEFAULT_PROFILE]["fan_on_above_c"]
-            or co2 >= config.CO2_COMFORT_MAX
-        )
-        fan_current = 0.34 if fan_should_run else 0.0
-        fan_power = fan_current * config.FAN_VOLTAGE
+        lighting_on = occupied and light < config.PROFILES[config.DEFAULT_PROFILE]["light_on_below_lux"]
+        lighting_current = 0.18 if lighting_on else 0.0
+        lighting_power = lighting_current * config.LIGHTING_VOLTAGE
         return {
             "temperature": round(temperature, 2),
             "humidity": round(humidity, 2),
@@ -134,6 +162,6 @@ class SensorDataCollector:
             "noise": round(noise, 2),
             "smoke": round(smoke, 2),
             "pm25": round(pm25, 2),
-            "fan_current": round(fan_current, 2),
-            "fan_power": round(fan_power, 2),
+            "fan_current": round(lighting_current, 2),
+            "fan_power": round(lighting_power, 2),
         }

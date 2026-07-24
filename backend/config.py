@@ -74,10 +74,18 @@ BUZZER_INSTALLED = _env_bool("BUZZER_INSTALLED", default=True)
 DEFAULT_PROFILE = _env("DEFAULT_PROFILE", default="balanced")
 FAN_VOLTAGE = float(_env("FAN_VOLTAGE", default="24.0"))
 FAN_ALWAYS_ON_POWER_W = float(_env("FAN_ALWAYS_ON_POWER_W", default="24.0"))
+LIGHTING_VOLTAGE = float(_env("LIGHTING_VOLTAGE", "BULB_VOLTAGE", default=str(FAN_VOLTAGE)))
+LIGHTING_ALWAYS_ON_POWER_W = float(_env("LIGHTING_ALWAYS_ON_POWER_W", "BULB_ALWAYS_ON_POWER_W", default=str(FAN_ALWAYS_ON_POWER_W)))
 CARBON_EMISSION_FACTOR_KG_PER_KWH = float(
     _env("CARBON_EMISSION_FACTOR_KG_PER_KWH", default="0.7")
 )
-LIGHTING_ANALOG_MAX = float(_env("LIGHTING_ANALOG_MAX", default="10.0"))
+# The IO22U AO brightness command accepts a direct 0-100 numeric setpoint.
+LIGHTING_ANALOG_MAX = float(_env("LIGHTING_ANALOG_MAX", "LIGHTING_AO_MAX", default="100.0"))
+LIGHTING_BRIGHTNESS_POINT = _env(
+    "LIGHTING_BRIGHTNESS_POINT",
+    "LIGHTING_AO_POINT",
+    default="亮度设置值",
+)
 
 SMOKE_THRESHOLD = float(_env("SMOKE_THRESHOLD", default="150"))
 SMOKE_HYSTERESIS = float(_env("SMOKE_HYSTERESIS", default="20"))
@@ -87,11 +95,11 @@ NOISE_HYSTERESIS = float(_env("NOISE_HYSTERESIS", default="7"))
 NOISE_DURATION_SECONDS = int(_env("NOISE_DURATION_SECONDS", default="10"))
 NOISE_CLEAR_DURATION_SECONDS = int(_env("NOISE_CLEAR_DURATION_SECONDS", default="20"))
 CO2_COMFORT_MAX = float(_env("CO2_COMFORT_MAX", default="1200"))
-CO2_FAN_OFF_BELOW = float(_env("CO2_FAN_OFF_BELOW", default="900"))
+CO2_FAN_OFF_BELOW = float(_env("CO2_FAN_OFF_BELOW", default="1100"))
 FAN_TEMP_HYSTERESIS = float(_env("FAN_TEMP_HYSTERESIS", default="1.0"))
 
 FSM_ENTER_OCCUPIED = float(_env("FSM_ENTER_OCCUPIED", default="0.45"))
-FSM_EXIT_OCCUPIED = float(_env("FSM_EXIT_OCCUPIED", default="0.30"))
+FSM_EXIT_OCCUPIED = float(_env("FSM_EXIT_OCCUPIED", default="0.35"))
 FSM_ENTER_ARRIVING = float(_env("FSM_ENTER_ARRIVING", default="0.40"))
 FSM_ENTER_LEAVING = float(_env("FSM_ENTER_LEAVING", default="0.40"))
 
@@ -119,8 +127,23 @@ SENSORS = {
     "noise": {"point_name": "噪声传感器", "unit": "dB", "raw": True},
     "smoke": {"point_name": "烟雾传感器", "unit": "ppm", "raw": True},
     "pm25": {"point_name": "PM2.5浓度", "unit": "µg/m³", "raw": True},
-    "fan_current": {"point_name": "风扇电流（功率）", "unit": "A", "raw": True},
-    "fan_power": {"point_name": "风扇电流（功率）", "unit": "W", "raw": False},
+    "fan_current": {
+        # The IO22U exposes the dimmable bulb load as a 0-5 A current point.
+        "point_name": _env(
+            "LIGHTING_CURRENT_POINT",
+            "BULB_CURRENT_POINT",
+            default="可调节灯泡电流（功率）",
+        ),
+        "unit": "A",
+        "raw": True,
+    },
+    "fan_power": {
+        # This installation has no independent lamp power point. Leave empty to
+        # derive watts from the measured current and LIGHTING_VOLTAGE.
+        "point_name": _env("LIGHTING_POWER_POINT", "BULB_POWER_POINT", default=""),
+        "unit": "W",
+        "raw": False,
+    },
 }
 
 RAW_SENSOR_KEYS = [name for name, meta in SENSORS.items() if meta["raw"]]
@@ -128,11 +151,10 @@ RAW_SENSOR_KEYS = [name for name, meta in SENSORS.items() if meta["raw"]]
 DEVICE_POINTS = {
     "buzzer": {"point_name": "蜂鸣器", "kind": "bool"},
     "warning_led": {"point_name": "警示LED开关", "kind": "bool"},
-    "lighting_led": {"point_name": "照明LED", "kind": "real"},
+    "lighting_led": {"point_name": LIGHTING_BRIGHTNESS_POINT, "kind": "real"},
     "fan": {"point_name": "风扇开关", "kind": "bool"},
 }
 
-DEVICE_POINTS["lighting_led"].update({"point_name": "\u7167\u660eLED", "kind": "bool"})
 DEVICE_POINTS["buzzer"]["installed"] = BUZZER_INSTALLED
 
 PROFILES = {

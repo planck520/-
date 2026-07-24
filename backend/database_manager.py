@@ -385,7 +385,7 @@ class DatabaseManager:
 
         total_kwh = total_wh / 1000.0
         avg_power_w = total_wh / elapsed_hours if elapsed_hours else 0.0
-        always_on_kwh = config.FAN_ALWAYS_ON_POWER_W * elapsed_hours / 1000.0
+        always_on_kwh = config.LIGHTING_ALWAYS_ON_POWER_W * elapsed_hours / 1000.0
         saving_percent = 0.0
         if always_on_kwh > 0:
             saving_percent = max(0.0, (always_on_kwh - total_kwh) / always_on_kwh * 100.0)
@@ -397,6 +397,7 @@ class DatabaseManager:
             "elapsed_hours": round(elapsed_hours, 2),
             "total_energy_kwh": round(total_kwh, 3),
             "fan_runtime_minutes": int(runtime_seconds / 60.0),
+            "lighting_runtime_minutes": int(runtime_seconds / 60.0),
             "avg_power_w": round(avg_power_w, 1),
             "co2_reduction_kg": round(
                 max(0.0, always_on_kwh - total_kwh) * config.CARBON_EMISSION_FACTOR_KG_PER_KWH,
@@ -437,6 +438,7 @@ class DatabaseManager:
                 {
                     "ts": current_ts.isoformat(timespec="seconds"),
                     "fan_power_w": round(current_value, 2),
+                    "lighting_power_w": round(current_value, 2),
                     "cumulative_kwh": round(total_wh / 1000.0, 5),
                 }
             )

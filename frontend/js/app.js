@@ -6,8 +6,8 @@ const SENSOR_META = {
   noise: { label: "噪声", unit: "dB", accent: "#ff9f43", icon: "/app/icon/%E5%99%AA%E5%A3%B0.svg", warn: (v) => v >= 65 },
   smoke: { label: "烟雾", unit: "ppm", accent: "#ff5b6e", icon: "/app/icon/%E7%83%9F%E9%9B%BE%E6%8A%A5%E8%AD%A6.svg", warn: (v) => v > 150 },
   pm25: { label: "PM2.5", unit: "µg/m³", accent: "#9be15d", icon: "/app/icon/pm2.5.svg", warn: (v) => v > 75 },
-  fan_current: { label: "风扇电流", unit: "A", accent: "#4f9cff", icon: "/app/icon/%E7%94%B5%E6%B5%81.svg", warn: () => false },
-  fan_power: { label: "风扇功率", unit: "W", accent: "#22d3ee", icon: "/app/icon/%E5%8A%9F%E7%8E%87.svg", warn: () => false },
+  fan_current: { label: "灯泡电流", unit: "A", accent: "#4f9cff", icon: "/app/icon/%E7%94%B5%E6%B5%81.svg", warn: () => false },
+  fan_power: { label: "灯泡功率", unit: "W", accent: "#22d3ee", icon: "/app/icon/%E5%8A%9F%E7%8E%87.svg", warn: () => false },
 };
 
 const DEVICE_META = {
@@ -168,7 +168,6 @@ function buildStaticControls() {
     .join("");
 
   $("#sensor-selector").innerHTML = Object.entries(SENSOR_META)
-    .filter(([key]) => key !== "fan_power")
     .map(([key, meta]) => `
       <label>
         <input type="checkbox" value="${key}" ${state.selectedSensors.has(key) ? "checked" : ""}>
@@ -692,7 +691,7 @@ function renderEnergy() {
   const comparison = summary.comparison || {};
   $("#energy-kpis").innerHTML = [
     ["累计耗电", `${summary.total_energy_kwh ?? "--"} kWh`],
-    ["风扇运行", formatRuntimeMinutes(summary.fan_runtime_minutes)],
+    ["照明运行", formatRuntimeMinutes(summary.lighting_runtime_minutes ?? summary.fan_runtime_minutes)],
     ["平均功率", `${summary.avg_power_w ?? "--"} W`],
     ["碳减排", `${summary.co2_reduction_kg ?? "--"} kg`],
   ].map(([label, value]) => `<div class="kpi-card"><span class="metric-label">${label}</span><strong>${value}</strong></div>`).join("");
@@ -701,7 +700,7 @@ function renderEnergy() {
     { label: "自动模式", value: Number(comparison.ai_mode_kwh || 0), color: "#22d3ee" },
     { label: "常开模式", value: Number(comparison.always_on_kwh || 0), color: "#ff9f43" },
   ], "kWh");
-  drawLineChart($("#power-chart"), [{ label: "风扇功率", color: "#40d383", data: state.energySeries.map((row) => ({ ts: row.ts, value: row.fan_power_w })) }], "W");
+  drawLineChart($("#power-chart"), [{ label: "灯泡功率", color: "#40d383", data: state.energySeries.map((row) => ({ ts: row.ts, value: row.lighting_power_w ?? row.fan_power_w })) }], "W");
 
   const saving = Number(comparison.saving_percent || 0);
   $("#energy-donut").style.background = `conic-gradient(var(--cyan) 0 ${Math.max(5, saving)}%, var(--green) ${Math.max(5, saving)}% 100%)`;
@@ -710,7 +709,7 @@ function renderEnergy() {
 
 function drawHistoryChart() {
   const series = Object.entries(state.historyData).map(([sensor, rows]) => ({
-    label: SENSOR_META[sensor]?.label || sensor,
+    label: `${SENSOR_META[sensor]?.label || sensor} (${SENSOR_META[sensor]?.unit || "--"})`,
     color: SENSOR_META[sensor]?.accent || "#fff",
     data: rows.map((row) => ({ ts: row.ts, value: row.value })),
   }));
@@ -819,12 +818,13 @@ function resizeCharts() {
 }
 
 function exportHistoryCsv() {
-  const rows = [["sensor", "timestamp", "value"]];
+  const rows = [["指标", "单位", "时间", "数值"]];
   Object.entries(state.historyData).forEach(([sensor, data]) => {
-    data.forEach((row) => rows.push([sensor, row.ts, row.value]));
+    const meta = SENSOR_META[sensor] || { label: sensor, unit: "" };
+    data.forEach((row) => rows.push([meta.label, meta.unit, row.ts, row.value]));
   });
-  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
-  downloadBlob(csv, "sensor-history.csv", "text/csv;charset=utf-8");
+  const csv = "\ufeff" + rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  downloadBlob(csv, "历史趋势.csv", "text/csv;charset=utf-8");
 }
 
 function exportHistoryPng() {

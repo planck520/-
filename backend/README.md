@@ -43,6 +43,28 @@ $env:OBIX_USERNAME="obixuser"
 $env:OBIX_PASSWORD="ADmin12345"
 ```
 
+The connected IO22U provides lamp current through `可调节灯泡电流（功率）`.
+The project converts it to watts with `LIGHTING_VOLTAGE` (24 V by default), because
+this station has no separate lamp-power point. Set the voltage to the actual lamp
+supply value when it differs:
+
+```powershell
+$env:LIGHTING_VOLTAGE="24"
+```
+
+## Dimmable Lighting AO
+
+The connected LED lamp uses the IO22U analog-output point `亮度设置值`, a writable
+`real` value. The dashboard brightness slider and automatic lighting rules send
+`0-100` directly to this point, where `0` turns the lamp off and `100` is full
+brightness. Override the point name or output range only when the station is
+renamed or configured differently:
+
+```powershell
+$env:LIGHTING_BRIGHTNESS_POINT="亮度设置值"
+$env:LIGHTING_AO_MAX="100"
+```
+
 AI API config can be stored in a local file:
 
 ```powershell
